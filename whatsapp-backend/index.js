@@ -1,7 +1,10 @@
+require('dotenv').config();
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const { createClient } = require('@supabase/supabase-js');
 const qrcode = require('qrcode');
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
 const port = process.env.PORT || 10000;
@@ -158,6 +161,76 @@ const groupUpdateChannel = supabase
     .subscribe();
 
 
+// Listen for Outbound Messages (status = 'pending', direction = 'outbound')
+const messageOutboundChannel = supabase
+    .channel('whatsapp-outbound-messages')
+    .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'messages', filter: "direction=eq.outbound" },
+        async (payload) => {
+            console.log('Outbound message request:', payload.new);
+            const message = payload.new;
+            
+            // 1. Find the right client (bot) to send this message
+            // We need to know which group this message belongs to, and which bot is a member of that group.
+            
+            if (!message.group_id) {
+                console.error('Message has no group_id, cannot send.');
+                return;
+            }
+
+            // Get group details to find JID
+            const { data: groupData } = await supabase
+                .from('chat_groups')
+                .select('group_jid')
+                .eq('id', message.group_id)
+                .single();
+
+            if (!groupData || !groupData.group_jid) {
+                 console.error('Group not found or has no JID:', message.group_id);
+                 return;
+            }
+
+            // Find a client that is a member of this group (or just use Admin client for now)
+            // Ideally, we should check 'chat_group_members' table to see which user (bot) is in this group.
+            // For simplicity, we'll try to find ANY connected client that can see this chat.
+            
+            let sent = false;
+            for (const [userId, client] of clients.entries()) {
+                if (!client.info) continue;
+
+                try {
+                    const chat = await client.getChatById(groupData.group_jid);
+                    if (chat) {
+                        console.log(`Sending message via user ${userId} to ${groupData.group_jid}`);
+                        await chat.sendMessage(message.content);
+                        
+                        // Update message status to 'sent'
+                        await supabase
+                            .from('messages')
+                            .update({ status: 'sent', updated_at: new Date().toISOString() })
+                            .eq('id', message.id);
+                            
+                        sent = true;
+                        break;
+                    }
+                } catch (err) {
+                    // This client might not be in the group, try next
+                }
+            }
+
+            if (!sent) {
+                console.error('Failed to send message: No connected client has access to this group.');
+                await supabase
+                    .from('messages')
+                    .update({ status: 'failed' })
+                    .eq('id', message.id);
+            }
+        }
+    )
+    .subscribe();
+
+
 // Active Clients Map: userId -> Client
 const clients = new Map();
 
@@ -295,11 +368,13 @@ async function initializeClient(userId) {
 
                 if (isAdmin) {
                     // Admin: Master Sync (Create/Update Groups)
+                    const groupName = group.name || `Grup ${group.id._serialized.split('@')[0]}`;
+                    
                     const { data: groupData, error: groupError } = await supabase
                         .from('chat_groups')
                         .upsert({
                             group_jid: group.id._serialized,
-                            name: group.name,
+                            name: groupName,
                             is_whatsapp_group: true,
                             updated_at: new Date().toISOString()
                         }, { onConflict: 'group_jid' })
@@ -400,8 +475,24 @@ async function initializeClient(userId) {
             .update({ status: 'disconnected', qr_code: null })
             .eq('user_id', userId);
         
-        client.destroy();
+        try {
+            await client.destroy();
+        } catch (e) {
+            console.error('Error destroying client:', e);
+        }
         clients.delete(userId);
+
+        // Clean up session directory
+        const sessionPath = path.join(__dirname, '.wwebjs_auth', `session-${userId}`);
+        if (fs.existsSync(sessionPath)) {
+            console.log(`Deleting session files for ${userId}...`);
+            try {
+                fs.rmSync(sessionPath, { recursive: true, force: true });
+                console.log(`Session files deleted for ${userId}`);
+            } catch (err) {
+                console.error(`Error deleting session files for ${userId}:`, err);
+            }
+        }
     });
 
     try {

@@ -62,6 +62,7 @@ export default function WhatsAppMessages() {
 
     // WhatsApp Connection State
     const [isWhatsAppConnected, setIsWhatsAppConnected] = useState<boolean | null>(null);
+    const [myPhone, setMyPhone] = useState<string | null>(null);
 
     // ESC to close viewer
     useEffect(() => {
@@ -80,7 +81,7 @@ export default function WhatsAppMessages() {
             try {
                 const { data, error } = await supabase
                     .from('whatsapp_sessions')
-                    .select('status')
+                    .select('status, phone_number')
                     .eq('user_id', user.id)
                     .single();
 
@@ -91,6 +92,7 @@ export default function WhatsAppMessages() {
                 }
 
                 setIsWhatsAppConnected(data?.status === 'connected');
+                if (data?.phone_number) setMyPhone(data.phone_number);
             } catch (err) {
                 console.error('Connection check failed:', err);
                 setIsWhatsAppConnected(false);
@@ -149,29 +151,68 @@ export default function WhatsAppMessages() {
 
             if (activeFilter === 'my_groups') {
                 if (myGroupIds.length === 0) {
-                    // Fallback to empty if no groups found
                     query = query.in('assigned_employee_group_id', []); 
                 } else {
                     query = query.in('assigned_employee_group_id', myGroupIds);
                 }
-            } else if (activeFilter !== 'all') {
+            } else if (activeFilter === 'all') {
+                // Sadece benim üyesi olduğum WhatsApp gruplarını getir
+                // (Admin ise hepsini görebilir, çalışan ise sadece dahil olduklarını)
+                if (user?.role !== 'admin') {
+                     // Get list of group IDs where I am a member
+                     // const { data: memberOf } = await supabase
+                     //    .from('chat_group_members')
+                     //    .select('group_id')
+                     //    .eq('phone', myPhone || ''); // Backend needs to sync my phone first
+                     
+                     // Fallback: If phone not synced yet, maybe use assigned_employee_group_id logic?
+                     // Or just show assigned groups + any group I'm explicitly added to.
+                     // For now, let's stick to 'assigned_employee_group_id' logic for simplicity + explicit memberships
+                     
+                     // Actually, user wants 'all' to mean "All groups I have access to via categories".
+                     // So if I have access to Category A (3 groups) and Category B (2 groups), 'all' should show 5 groups.
+                     
+                     if (myGroupIds.length > 0) {
+                         query = query.in('assigned_employee_group_id', myGroupIds);
+                     } else {
+                         // If no categories assigned, show nothing (or just explicit memberships)
+                         query = query.in('id', []);
+                     }
+                }
+            } else {
                 // Specific Employee Group
                 query = query.eq('assigned_employee_group_id', activeFilter);
             }
-            // If 'all', we fetch all (RLS permitting)
 
             const { data } = await query;
             setGroups(data || []);
 
-            // Auto-select first group if none selected
-            // Only auto-select if we don't have a selection, to avoid jumping around
-            if (data && data.length > 0 && !selectedGroupId) {
-                 // setSelectedGroupId(data[0].id); // Optional: Auto-select
-            }
+            // Auto-select logic...
         } catch (error) {
             console.error('Error fetching chat groups:', error);
         }
     }
+
+    // Realtime Listener for Group Deletions
+    useEffect(() => {
+        const channel = supabase
+            .channel('chat-groups-changes')
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_groups' }, (payload) => {
+                if (payload.eventType === 'DELETE') {
+                    setGroups(prev => prev.filter(g => g.id !== payload.old.id));
+                    if (selectedGroupId === payload.old.id) setSelectedGroupId(null);
+                } else if (payload.eventType === 'INSERT') {
+                     // Check if this new group belongs to my filters
+                     // For simplicity, just re-fetch
+                     fetchChatGroups();
+                } else if (payload.eventType === 'UPDATE') {
+                     fetchChatGroups();
+                }
+            })
+            .subscribe();
+
+        return () => { supabase.removeChannel(channel); };
+    }, [activeFilter, myGroupIds]);
 
     // 3. Fetch Group Details (Members & Messages) when group selected
     useEffect(() => {
