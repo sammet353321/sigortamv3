@@ -490,7 +490,7 @@ export default function EmployeeQuoteDetail() {
                 </h3>
                 <div className="flex space-x-2">
                     <button 
-                        onClick={handleOCR} 
+                        onClick={() => handleOCR()} 
                         disabled={ocrScanning}
                         className="flex items-center bg-blue-600 text-white px-3 py-1 rounded text-xs hover:bg-blue-700 disabled:opacity-50"
                     >
