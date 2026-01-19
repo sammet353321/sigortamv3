@@ -1,6 +1,18 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const { createClient } = require('@supabase/supabase-js');
 const qrcode = require('qrcode');
+const express = require('express');
+
+const app = express();
+const port = process.env.PORT || 10000;
+
+app.get('/', (req, res) => {
+  res.send('WhatsApp Bot Backend Running');
+});
+
+app.listen(port, () => {
+  console.log(`Web server listening on port ${port}`);
+});
 
 // Supabase Setup
 const SUPABASE_URL = 'https://aqubbkxsfwmhfbolkfah.supabase.co';
@@ -197,7 +209,7 @@ async function initializeClient(userId) {
         authStrategy: new LocalAuth({ clientId: userId }),
         puppeteer: {
             headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox']
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
         }
     });
 
