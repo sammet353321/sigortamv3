@@ -314,36 +314,38 @@ export default function WhatsAppMessages() {
 
     // Realtime Listener
     useEffect(() => {
-        if (!selectedGroupId || groupMembers.length === 0) return;
-
-        const phones = groupMembers.map(m => m.phone);
+        if (!selectedGroupId) return;
 
         const channel = supabase
-            .channel('group-messages')
-            .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (payload) => {
+            .channel(`group-messages-${selectedGroupId}`) // Unique channel name per group
+            .on('postgres_changes', { 
+                event: 'INSERT', 
+                schema: 'public', 
+                table: 'messages', 
+                filter: `group_id=eq.${selectedGroupId}` // Filter by Group ID directly
+            }, (payload) => {
                 const newMsg = payload.new as any;
-                if (phones.includes(newMsg.sender_phone)) {
-                     setMessages(prev => {
-                        const existingTempIndex = prev.findIndex(m => m.content === newMsg.content && m.id.startsWith('temp-'));
-                        if (existingTempIndex !== -1) {
-                            const newMessages = [...prev];
-                            newMessages[existingTempIndex] = newMsg;
-                            return newMessages;
-                        }
-                        if (prev.some(m => m.id === newMsg.id)) return prev;
-                        return [...prev, newMsg];
-                    });
-                    
-                    // Mark new incoming message as read if we are viewing this chat
-                    if (newMsg.direction === 'inbound') {
-                        markMessagesAsRead([newMsg]);
+                
+                setMessages(prev => {
+                    const existingTempIndex = prev.findIndex(m => m.content === newMsg.content && m.id.startsWith('temp-'));
+                    if (existingTempIndex !== -1) {
+                        const newMessages = [...prev];
+                        newMessages[existingTempIndex] = newMsg;
+                        return newMessages;
                     }
+                    if (prev.some(m => m.id === newMsg.id)) return prev;
+                    return [...prev, newMsg];
+                });
+                
+                // Mark new incoming message as read if we are viewing this chat
+                if (newMsg.direction === 'inbound') {
+                    markMessagesAsRead([newMsg]);
                 }
             })
             .subscribe();
 
         return () => { supabase.removeChannel(channel); };
-    }, [selectedGroupId, groupMembers]);
+    }, [selectedGroupId]);
 
     // Use useLayoutEffect for immediate scroll
     useLayoutEffect(() => {

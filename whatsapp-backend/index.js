@@ -586,12 +586,30 @@ async function initializeClient(userId) {
                  return; 
             }
 
+            // Handle Media
+            let mediaUrl = null;
+            let messageType = 'text';
+
+            if (msg.hasMedia) {
+                try {
+                    const media = await msg.downloadMedia();
+                    if (media) {
+                        // Create Data URL
+                        mediaUrl = `data:${media.mimetype};base64,${media.data}`;
+                        messageType = 'image';
+                    }
+                } catch (mediaErr) {
+                    console.error('Error downloading media:', mediaErr);
+                }
+            }
+
             const { error } = await supabase.from('messages').insert({
                 group_id: groupId, // CRITICAL FIX: Link message to group
                 sender_phone: actualSender,
                 direction: 'inbound',
-                type: msg.hasMedia ? 'image' : 'text', 
+                type: messageType, 
                 content: msg.body,
+                media_url: mediaUrl,
                 created_at: new Date(msg.timestamp * 1000).toISOString(),
             });
             
