@@ -3,7 +3,7 @@ import { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
 import { format } from 'date-fns';
-import { Search, Filter, Eye, ArrowRight, Download, MoreVertical, X, Check, FileText, Trash2, Edit } from 'lucide-react';
+import { Search, Filter, Eye, ArrowRight, Download, MoreVertical, X, Check, FileText, Trash2, Edit, Car } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
 

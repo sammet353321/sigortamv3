@@ -5,10 +5,12 @@ import { supabase } from '@/lib/supabase';
 import { Upload, Car, FileText, Check, Clipboard, ScanLine, Loader2, Sparkles, Hash, AlertCircle, QrCode } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { analyzeLicenseWithGemini } from '@/lib/gemini';
+import toast from 'react-hot-toast';
 
 export default function EmployeeNewQuote() {
   const navigate = useNavigate();
   const location = useLocation();
+  const whatsappContext = location.state as any;
   const { user } = useAuth();
   const [loading, setLoading] = useState(false);
   const [scanning, setScanning] = useState(false);
