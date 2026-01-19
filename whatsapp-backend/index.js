@@ -42,8 +42,18 @@ const groupCreateChannel = supabase
             
             // Try to create group using the first available admin client
             let created = false;
+            
+            if (clients.size === 0) {
+                console.error('No active WhatsApp clients connected. Cannot create group.');
+                // Don't mark as failed immediately, maybe wait?
+                // For now, let's mark failed so user knows.
+            }
+
             for (const [userId, client] of clients.entries()) {
-                if (!client.info) continue;
+                if (!client.info) {
+                     console.log(`Client for user ${userId} is not ready yet.`);
+                     continue;
+                }
 
                 try {
                     // Note: WhatsApp requires at least 1 participant to create a group.
@@ -284,6 +294,28 @@ async function checkExistingSessions() {
 checkExistingSessions();
 
 async function initializeClient(userId) {
+    // 0. Clean up any existing session if starting fresh scanning
+    // If status is scanning, it means we want a NEW QR, so delete old session.
+    // However, if we are restarting server and status is 'connected', we keep it.
+    
+    const { data: sessionData } = await supabase
+        .from('whatsapp_sessions')
+        .select('status')
+        .eq('user_id', userId)
+        .single();
+
+    if (sessionData && sessionData.status === 'scanning') {
+        const sessionPath = path.join(__dirname, '.wwebjs_auth', `session-${userId}`);
+        if (fs.existsSync(sessionPath)) {
+            console.log(`Force clearing old session for new connection: ${userId}`);
+            try {
+                fs.rmSync(sessionPath, { recursive: true, force: true });
+            } catch (err) {
+                console.error(`Error clearing old session:`, err);
+            }
+        }
+    }
+
     // Note: Using LocalAuth with a clientId allows saving session data locally
     const client = new Client({
         authStrategy: new LocalAuth({ clientId: userId }),
@@ -364,11 +396,22 @@ async function initializeClient(userId) {
             const isAdmin = userData.role === 'admin';
 
             for (const group of groups) {
+                // FILTER: Skip unnamed groups or temporary groups
+                if (!group.name) continue;
+                
+                // FILTER: Skip groups that look like raw JIDs (e.g. "120363...") unless they have been renamed
+                // Usually legitimate groups have a proper name.
+                // Regex to check if name is just numbers or JID-like
+                if (/^\d+$/.test(group.name) || group.name.startsWith('Grup 1203')) {
+                     // console.log('Skipping likely unnamed group:', group.name);
+                     continue;
+                }
+
                 let groupId = null;
 
                 if (isAdmin) {
                     // Admin: Master Sync (Create/Update Groups)
-                    const groupName = group.name || `Grup ${group.id._serialized.split('@')[0]}`;
+                    const groupName = group.name;
                     
                     const { data: groupData, error: groupError } = await supabase
                         .from('chat_groups')
