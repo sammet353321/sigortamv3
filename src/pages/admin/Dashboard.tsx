@@ -46,10 +46,8 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     // Initial fetch
-    let cleanup: (() => void) | undefined;
-    
     const runFetch = async () => {
-        cleanup = await fetchDashboardData();
+        await fetchDashboardData();
     };
     runFetch();
 
@@ -59,13 +57,12 @@ export default function AdminDashboard() {
     }, 30000);
 
     return () => {
-        if (cleanup) cleanup();
         clearInterval(interval);
     };
   }, []);
 
   async function fetchDashboardData() {
-        if (cleanup && !navigator.onLine) return; // Optional check
+        if (!navigator.onLine) return; // Optional check
 
         const controller = new AbortController();
         // We could pass controller.signal to supabase calls if supported, but Supabase JS client handles it differently or not directly exposed in simple queries.

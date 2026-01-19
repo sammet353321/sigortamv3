@@ -157,7 +157,7 @@ export default function Layout() {
                  </div>
                  <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-white truncate">
-                      {user.user_metadata?.name || 'Kullanıcı'}
+                      {user.name || 'Kullanıcı'}
                     </p>
                     <p className="text-xs text-slate-400 truncate">
                       {user.role === 'admin' ? 'Yönetici' : user.role === 'employee' ? 'Personel' : 'Acente'}

@@ -141,7 +141,7 @@ export default function QuickQuotePanel({ isOpen, onClose }: QuickQuotePanelProp
         }
     };
 
-    const uploadFile = async (file: File, type: 'document' | 'offer-image') => {
+    const uploadFile = async (file: File, type: 'document' | 'offer-image' | 'file') => {
         if (!user) return;
         setLoading(true);
         try {

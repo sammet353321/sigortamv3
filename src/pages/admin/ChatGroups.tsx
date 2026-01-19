@@ -243,7 +243,7 @@ function GroupDetailModal({ group, onClose }: { group: ChatGroup; onClose: () =>
                 </div>
 
                 <div className="flex-1 overflow-y-auto p-4">
-                    {activeTab === 'members' ? <GroupMembers group={group} /> : <GroupPermissions group={group} />}
+                    {activeTab === 'members' ? <GroupMembers group={group} /> : <GroupPermissions group={group} onUpdate={() => {}} />}
                 </div>
             </div>
         </div>
