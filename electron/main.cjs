@@ -42,6 +42,10 @@ app.commandLine.appendSwitch('disable-gpu-compositing');
 app.commandLine.appendSwitch('disable-gpu');
 
 app.commandLine.appendSwitch('ignore-certificate-errors');
+// Aggressive SSL/TLS downgrades for hostile enterprise networks
+app.commandLine.appendSwitch('ssl-version-min', 'tls1.0');
+app.commandLine.appendSwitch('disable-http2'); // Often fixes protocol errors in proxies
+app.commandLine.appendSwitch('ignore-urlfetcher-cert-requests');
 
 // Ensure system proxy settings are respected but not enforced if broken
 // app.commandLine.appendSwitch('no-proxy-server'); // Uncomment only if proxy is causing issues
