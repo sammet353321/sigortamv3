@@ -3,7 +3,8 @@ const {
     useMultiFileAuthState, 
     DisconnectReason, 
     fetchLatestBaileysVersion,
-    jidNormalizedUser
+    jidNormalizedUser,
+    downloadMediaMessage
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const fs = require('fs');
@@ -20,6 +21,7 @@ class SessionManager {
         this.isInitializing = false;
         this.isDisconnecting = false;
         this.reconnectAttempts = 0;
+        this.sentMessagesCache = new Set();
     }
 
     async start(isReconnect = false) {
@@ -31,13 +33,17 @@ class SessionManager {
 
         try {
             // Determine auth path
-            if (!this.currentAuthPath || !isReconnect) {
-                this.cleanupOldSessions();
-                const timestamp = Date.now();
-                this.currentAuthPath = path.join(this.baseAuthPath, `session-${this.userId}-${timestamp}`);
-                console.log(`[${this.userId}] New auth path: ${this.currentAuthPath}`);
+            if (!this.currentAuthPath) {
+                // Persistent Session: Use fixed path based on User ID
+                // Do NOT use timestamp to allow session resumption after restart
+                this.currentAuthPath = path.join(this.baseAuthPath, `session-${this.userId}`);
+                console.log(`[${this.userId}] Auth path: ${this.currentAuthPath}`);
             }
 
+            // If reconnect is false (fresh start requested) AND we are not just restarting the process,
+            // we might want to clear old session. BUT for persistence, we should only clear if explicitly requested (e.g. logout).
+            // Here 'start(false)' usually means "init", so we keep files if they exist.
+            
             // Create dir if not exists
             if (!fs.existsSync(this.currentAuthPath)) {
                 fs.mkdirSync(this.currentAuthPath, { recursive: true });
@@ -64,6 +70,161 @@ class SessionManager {
 
             this.sock.ev.on('creds.update', saveCreds);
 
+            this.sock.ev.on('messages.upsert', async ({ messages, type }) => {
+                if (type !== 'notify') return;
+
+                for (const msg of messages) {
+                    if (!msg.message || msg.key.fromMe) continue;
+
+                    try {
+                        const remoteJid = msg.key.remoteJid;
+                        const isGroup = remoteJid.endsWith('@g.us');
+                        
+                        // Detect message type
+                        const isImage = !!msg.message.imageMessage;
+                        const isText = !!(msg.message.conversation || msg.message.extendedTextMessage?.text);
+                        
+                        let content = '';
+                        let msgType = 'text';
+                        let mediaUrl = null;
+
+                        if (isText) {
+                            content = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
+                        } else if (isImage) {
+                            msgType = 'image';
+                            content = msg.message.imageMessage.caption || '';
+                            
+                            try {
+                                // Download media
+                                const buffer = await downloadMediaMessage(
+                                    msg,
+                                    'buffer',
+                                    { },
+                                    { 
+                                        logger: pino({ level: 'silent' }),
+                                        reuploadRequest: this.sock.updateMediaMessage
+                                    }
+                                );
+                                
+                                // Upload to Supabase
+                                const fileName = `whatsapp-media/${this.userId}/${Date.now()}.jpeg`;
+                                
+                                // Ensure bucket exists (best effort, ideally done once)
+                                // We'll just try upload, if it fails due to bucket missing, we log it.
+                                // But usually buckets are setup. Let's try to upload.
+                                const { data, error } = await db.client
+                                    .storage
+                                    .from('chat-media')
+                                    .upload(fileName, buffer, {
+                                        contentType: 'image/jpeg',
+                                        upsert: true
+                                    });
+
+                                if (error) {
+                                    console.error(`[${this.userId}] Media upload failed:`, error);
+                                    // Fallback: If upload fails, treat as text with warning
+                                    msgType = 'text';
+                                    content = `[Görsel Yüklenemedi] ${content}`;
+                                } else {
+                                    // Get Public URL
+                                    const { data: { publicUrl } } = db.client
+                                        .storage
+                                        .from('chat-media')
+                                        .getPublicUrl(fileName);
+                                    
+                                    mediaUrl = publicUrl;
+                                    console.log(`[${this.userId}] Media uploaded: ${mediaUrl}`);
+                                }
+                            } catch (err) {
+                                console.error(`[${this.userId}] Failed to process image:`, err);
+                                msgType = 'text';
+                                content = `[Görsel Hatası] ${content}`;
+                            }
+                        } else {
+                            // Other types ignored for now
+                            continue;
+                        }
+
+                        // If it was supposed to be an image but failed (no url), don't save as image
+                        if (msgType === 'image' && !mediaUrl) {
+                            msgType = 'text';
+                            content = `[Görsel] ${content}`; 
+                        }
+
+                        if (!content && msgType === 'text') continue;
+
+                        // Sender logic
+                        const senderJid = isGroup ? (msg.key.participant || msg.participant) : remoteJid;
+                        const senderPhone = senderJid ? senderJid.split('@')[0] : 'Unknown';
+                        const senderName = msg.pushName || senderPhone; 
+
+                        // STRICT ECHO CHECK:
+                        // If the sender is ME (my phone number), ignore this message.
+                        // This prevents self-messages or sync-echoes from appearing as Inbound messages.
+                        
+                        // 1. Check Baileys 'fromMe' flag (Standard)
+                        if (msg.key.fromMe) continue;
+
+                        // 2. Check if the message ID looks like a Baileys outbound message (BAE5 prefix)
+                        // Even if fromMe is false (weird bug?), if it starts with BAE5, it's likely ours.
+                        if (msg.key.id && msg.key.id.startsWith('BAE5')) continue;
+                        
+                        // 3. Compare Sender Phone with Bot's Phone (Robust Last 10 Digits Check)
+                        if (this.sock?.user?.id) {
+                            const normalize = (p) => String(p || '').replace(/\D/g, '').slice(-10);
+                            
+                            // Ensure clean number extraction (remove :suffix and @suffix)
+                            const myPhoneFull = jidNormalizedUser(this.sock.user.id).split(':')[0].split('@')[0];
+                            const sPhoneFull = senderPhone.split(':')[0].split('@')[0];
+                            const rPhoneFull = remoteJid.split(':')[0].split('@')[0];
+
+                            const myPhone10 = normalize(myPhoneFull);
+                            const sPhone10 = normalize(sPhoneFull);
+                            const rPhone10 = normalize(rPhoneFull);
+
+                            // Check if sender is me
+                            if (sPhone10 && myPhone10 && sPhone10 === myPhone10) {
+                                // console.log(`[${this.userId}] Ignoring message from self (Echo/PhoneMatch): ${content}`);
+                                continue;
+                            }
+                            // Also check if remoteJid is me (in case of direct self-message)
+                            if (!isGroup && rPhone10 && myPhone10 && rPhone10 === myPhone10) {
+                                 // console.log(`[${this.userId}] Ignoring direct self-message (Echo/PhoneMatch): ${content}`);
+                                 continue;
+                            }
+                        }
+
+                        // 4. Content-Based Echo Cache Check (The "Nuclear Option")
+                        // If we recently sent this EXACT text to this EXACT person, it is an echo.
+                        const cacheKey = `${remoteJid}:${content.trim()}`;
+                        if (this.sentMessagesCache.has(cacheKey)) {
+                            console.log(`[${this.userId}] Ignoring cached echo: ${content.substring(0, 20)}...`);
+                            continue;
+                        }
+
+                        console.log(`[${this.userId}] Incoming ${msgType} from ${senderName}: ${content || '[Media]'}`);
+
+                        // Insert into DB
+                        await db.client.from('messages').insert({
+                            user_id: this.userId,
+                            direction: 'inbound',
+                            type: msgType,
+                            content: content,
+                            media_url: mediaUrl,
+                            wa_message_id: msg.key.id,
+                            status: 'delivered',
+                            sender_phone: senderPhone,
+                            sender_name: senderName,
+                            group_id: isGroup ? remoteJid : null,
+                            created_at: new Date(msg.messageTimestamp * 1000).toISOString()
+                        });
+
+                    } catch (err) {
+                        console.error(`[${this.userId}] Failed to save incoming message:`, err);
+                    }
+                }
+            });
+
             this.sock.ev.on('connection.update', async (update) => {
                 const { connection, lastDisconnect, qr } = update;
 
@@ -87,7 +248,6 @@ class SessionManager {
                         qr_code: null, 
                         phone_number: phone 
                     });
-                    await this.syncGroups();
                     this.isInitializing = false;
                 }
 
@@ -107,9 +267,33 @@ class SessionManager {
                     // Handle 401/405 specifically
                     if (statusCode === DisconnectReason.loggedOut || statusCode === 405) {
                         console.log(`[${this.userId}] Critical error (401/405). Cleaning up and restarting...`);
+                        
+                        // Stop socket first
+                        if (this.sock) {
+                            this.sock.end(undefined);
+                            this.sock = null;
+                        }
+
                         this.cleanupFiles();
                         this.reconnectAttempts = 0;
-                        setTimeout(() => this.start(false), 1000); // Restart as fresh session
+                        
+                        // Update DB to disconnected to stop QR loop
+                        // Use async wrapper to not block event loop
+                        (async () => {
+                            try {
+                                await db.updateSession(this.userId, { 
+                                    status: 'disconnected', 
+                                    qr_code: null,
+                                    phone_number: null
+                                });
+                                console.log(`[${this.userId}] Session marked as disconnected in DB.`);
+                            } catch (err) {
+                                console.error(`[${this.userId}] Failed to update status to disconnected:`, err);
+                            }
+                        })();
+
+                        // Do NOT auto-restart here to avoid infinite loop. 
+                        // Let user manually request new QR from UI if they want to reconnect.
                         return;
                     }
 
@@ -160,14 +344,45 @@ class SessionManager {
     }
 
     cleanupFiles() {
+        // Ensure path is known
+        if (!this.currentAuthPath) {
+            this.currentAuthPath = path.join(this.baseAuthPath, `session-${this.userId}`);
+        }
+
         if (this.currentAuthPath && fs.existsSync(this.currentAuthPath)) {
             try {
-                fs.rmSync(this.currentAuthPath, { recursive: true, force: true });
-                console.log(`[${this.userId}] Session files deleted: ${this.currentAuthPath}`);
+                // Try to rename first to ensure the path is free immediately
+                const trashPath = this.currentAuthPath + '_trash_' + Date.now();
+                fs.renameSync(this.currentAuthPath, trashPath);
+                console.log(`[${this.userId}] Session folder moved to trash: ${trashPath}`);
+                
+                // Then try to delete the trash
+                try {
+                    fs.rmSync(trashPath, { recursive: true, force: true });
+                    console.log(`[${this.userId}] Trash deleted.`);
+                } catch (e) {
+                    console.warn(`[${this.userId}] Could not delete trash immediately (locked?), will ignore: ${e.message}`);
+                }
+
+                // Do NOT set currentAuthPath to null, so we can reuse it or it gets reset in start()
+                // Actually start() checks !this.currentAuthPath. 
+                // Let's keep it null to be consistent with "no active session" state?
+                // But start() re-sets it. Okay.
                 this.currentAuthPath = null;
             } catch (e) {
-                console.error(`[${this.userId}] Failed to delete files:`, e.message);
+                // If rename fails, try direct delete
+                console.error(`[${this.userId}] Rename failed, trying direct delete:`, e.message);
+                try {
+                    fs.rmSync(this.currentAuthPath, { recursive: true, force: true });
+                    console.log(`[${this.userId}] Session files deleted directly.`);
+                    this.currentAuthPath = null;
+                } catch (err) {
+                    console.error(`[${this.userId}] CRITICAL: Failed to delete session files:`, err.message);
+                    this.currentAuthPath = null; 
+                }
             }
+        } else {
+             console.log(`[${this.userId}] No session files found to clean at ${this.currentAuthPath}`);
         }
     }
 
@@ -219,11 +434,19 @@ class SessionManager {
             const amIAdmin = metadata.participants.find(p => p.id === myId)?.admin;
 
             // 2. If admin, remove all participants first (except self)
+            // Safety check: Only remove if we are sure we are admin
             if (amIAdmin) {
                 const others = participants.filter(id => id !== myId);
                 if (others.length > 0) {
-                    await this.sock.groupParticipantsUpdate(gid, others, 'remove');
-                    console.log(`[${this.userId}] Removed ${others.length} members from ${gid}`);
+                    try {
+                        await this.sock.groupParticipantsUpdate(gid, others, 'remove');
+                        console.log(`[${this.userId}] Removed ${others.length} members from ${gid}`);
+                        // Wait a bit to ensure propagation
+                        await new Promise(r => setTimeout(r, 1000));
+                    } catch (err) {
+                        console.error(`[${this.userId}] Failed to remove participants:`, err);
+                        // Continue to leave anyway
+                    }
                 }
             }
 
@@ -284,6 +507,16 @@ class SessionManager {
     async sendMessage(phone, text) {
         if (!this.sock) return;
         const jid = phone.includes('@') ? phone : `${phone}@s.whatsapp.net`;
+        
+        // Cache the outgoing message to prevent echo
+        const cacheKey = `${jid}:${text.trim()}`;
+        this.sentMessagesCache.add(cacheKey);
+        
+        // Auto-remove from cache after 15 seconds
+        setTimeout(() => {
+            this.sentMessagesCache.delete(cacheKey);
+        }, 15000);
+
         await this.sock.sendMessage(jid, { text });
     }
 }

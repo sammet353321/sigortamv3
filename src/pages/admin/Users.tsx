@@ -82,24 +82,59 @@ export default function UsersPage() {
       });
 
       // 1. Create user using Admin API (auto confirms email)
-      const { data: authData, error: authError } = await adminSupabase.auth.admin.createUser({
-        email: newUser.email,
-        password: newUser.password,
-        email_confirm: true, // Auto confirm
-        user_metadata: {
-            name: newUser.name
-        }
-      });
+      // Note: If user exists in Auth but not in public.users, createUser will throw error.
+      // We should check if user exists first or handle the error gracefully.
+      
+      let authUser = null;
 
-      if (authError) throw authError;
+      try {
+          // 1. Try to create user
+          const { data: authData, error: authError } = await adminSupabase.auth.admin.createUser({
+            email: newUser.email,
+            password: newUser.password,
+            email_confirm: true,
+            user_metadata: {
+                name: newUser.name
+            }
+          });
+          
+          if (authError) throw authError;
+          authUser = authData.user;
 
-      if (authData.user) {
-        // 2. Insert into public.users with the selected role
+      } catch (err: any) {
+          // 2. If user already registered, try to find it
+          if (err.message?.includes('already been registered')) {
+              console.log('User already exists in Auth, trying to find ID...');
+              
+              // List users to find the UID by email
+              // Note: listUsers requires service_role key which we have
+              const { data: listData, error: listError } = await adminSupabase.auth.admin.listUsers();
+              
+              if (listError) {
+                  console.error('List users error:', listError);
+                  throw err; // Original error
+              }
+
+              const existingUser = listData.users.find(u => u.email === newUser.email);
+              
+              if (existingUser) {
+                  authUser = existingUser;
+                  toast.success('Kullanıcı Auth sisteminde bulundu, veritabanına ekleniyor...');
+              } else {
+                  throw new Error('Kullanıcı Auth sisteminde var deniyor ama listelenemedi.');
+              }
+          } else {
+              throw err;
+          }
+      }
+
+      if (authUser) {
+        // 3. Insert/Update into public.users
         // We will upsert to be safe and set the role.
         const { error: dbError } = await supabase
           .from('users')
           .upsert({
-            id: authData.user.id,
+            id: authUser.id,
             email: newUser.email,
             name: newUser.name,
             role: newUser.role,
@@ -112,7 +147,7 @@ export default function UsersPage() {
              await supabase
                 .from('users')
                 .update({ role: newUser.role, name: newUser.name })
-                .eq('id', authData.user.id);
+                .eq('id', authUser.id);
         }
 
         toast.success('Kullanıcı başarıyla oluşturuldu ve otomatik onaylandı!');

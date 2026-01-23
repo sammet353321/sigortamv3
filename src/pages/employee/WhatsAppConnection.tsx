@@ -21,15 +21,19 @@ export default function WhatsAppConnection() {
     // Polling Logic: Only poll if status is 'scanning' or 'connected'
     useEffect(() => {
         stopPolling();
-        if (session?.status === 'scanning') {
-            // Poll fast for QR
-            pollInterval.current = setInterval(fetchSession, 1000);
+        
+        // Always poll if we are generating or scanning to catch the update
+        if (session?.status === 'scanning' || generating) {
+            pollInterval.current = setInterval(fetchSession, 2000);
         } else if (session?.status === 'connected') {
-            // Poll slow for status check
             pollInterval.current = setInterval(fetchSession, 5000);
+        } else {
+             // Even if disconnected, poll occasionally in case of external updates
+             pollInterval.current = setInterval(fetchSession, 3000);
         }
+        
         return () => stopPolling();
-    }, [session?.status]);
+    }, [session?.status, generating]);
 
     function stopPolling() {
         if (pollInterval.current) {
@@ -47,11 +51,17 @@ export default function WhatsAppConnection() {
                 .single();
             
             if (data) {
-                // Only update if status or QR changed to avoid re-renders
                 setSession(prev => {
+                    // Simple check: if status changed, definitely update
+                    if (prev?.status !== data.status) return data;
+                    // If QR changed, update
+                    if (prev?.qr_code !== data.qr_code) return data;
+                    // Deep check for other fields
                     if (JSON.stringify(prev) !== JSON.stringify(data)) return data;
                     return prev;
                 });
+            } else {
+                 setSession(null);
             }
             setLoading(false);
         } catch (error) {
@@ -63,22 +73,24 @@ export default function WhatsAppConnection() {
         setConfirmDisconnect(false);
         setGenerating(true);
         try {
-            // 1. Reset DB status to 'scanning' to trigger backend
+            // Force reset session in DB to trigger backend restart
             const { data, error } = await supabase
                 .from('whatsapp_sessions')
                 .upsert({
                     user_id: user?.id,
                     status: 'scanning',
-                    qr_code: null,
+                    qr_code: null, // Clear old QR
                     phone_number: null,
                     updated_at: new Date().toISOString()
-                }, { onConflict: 'user_id' }) // Explicitly handle conflict on user_id
+                }, { onConflict: 'user_id' })
                 .select()
                 .single();
 
             if (error) throw error;
             setSession(data);
-            // toast.success('QR Kod isteği gönderildi...'); // Removed notification
+            
+            // Wait a bit and check if backend picked it up
+            // toast.success('QR Kod isteği gönderildi...');
         } catch (error: any) {
             toast.error('Hata: ' + error.message);
         } finally {

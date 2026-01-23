@@ -22,6 +22,7 @@ whatsapp-backend/.wwebjs_auth
 whatsapp-backend/.wwebjs_cache
 whatsapp-backend/auth_info_baileys
 whatsapp-backend/logs
+whatsapp-backend/service-account.json
 
 # Editor directories and files
 .vscode/*

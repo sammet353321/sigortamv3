@@ -64,11 +64,6 @@ export default function AdminDashboard() {
   async function fetchDashboardData() {
         if (!navigator.onLine) return; // Optional check
 
-        // Supabase JS Client v2 handles aborts internally if connection drops, 
-        // but explicit signal passing isn't strictly required for simple queries unless we want to cancel them manually.
-        // We remove the explicit AbortController usage here to prevent premature cancellations if that was the issue,
-        // or we can wrap calls to ignore specific abort errors more gracefully.
-
         try {
             const today = new Date();
             today.setHours(0, 0, 0, 0);
@@ -77,32 +72,37 @@ export default function AdminDashboard() {
             const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1).toISOString();
 
             // --- Row 1: Bugün ---
-            const { count: todayQuotes, error: err1 } = await supabase.from('teklifler').select('*', { count: 'exact', head: true }).gte('tarih', todayStr);
-            if (err1 && err1.code !== '20') throw err1;
+            const { count: todayQuotes, error: err1 } = await supabase.from('teklifler').select('*', { count: 'exact', head: true }).gte('tarih', todayStr).maybeSingle(); 
+            // .maybeSingle() prevents 406 Not Acceptable when head: true used with .select('*') in some versions, but standard way is usually safe. 
+            // Actually 'head: true' returns null data and count. 
+            // The 'abort' error usually happens if component unmounts or network flakiness. 
+            // We'll wrap individual calls to catch them.
+
+            if (err1 && err1.code !== '20') console.warn('Dashboard fetch error 1:', err1); // Just warn, don't throw to break all
 
             const { count: todayPolicies, error: err2 } = await supabase.from('policeler').select('*', { count: 'exact', head: true }).gte('tarih', todayStr);
-            if (err2 && err2.code !== '20') throw err2;
+            if (err2 && err2.code !== '20') console.warn('Dashboard fetch error 2:', err2);
 
             const { count: todayPending, error: err3 } = await supabase.from('teklifler').select('*', { count: 'exact', head: true }).eq('durum', 'bekliyor');
-            if (err3 && err3.code !== '20') throw err3;
+            if (err3 && err3.code !== '20') console.warn('Dashboard fetch error 3:', err3);
             
             // Active users (Total users)
             const { data: allUsers, error: err4 } = await supabase.from('users').select('*');
-            if (err4 && err4.code !== '20') throw err4;
+            if (err4 && err4.code !== '20') console.warn('Dashboard fetch error 4:', err4);
             const activeUsers = allUsers?.length || 0;
 
             // --- Row 2: Bu Ay (Detaylı veri çekiyoruz ki personel tablosunu dolduralım) ---
             const { data: monthQuotesData, count: monthQuotes, error: err5 } = await supabase
                 .from('teklifler')
-                .select('id, kesen_id, tarih, tur') // Changed urun_kategorisi to tur
+                .select('id, kesen_id, tarih, tur') 
                 .gte('tarih', startOfMonth);
-            if (err5 && err5.code !== '20') throw err5;
+            if (err5 && err5.code !== '20') console.warn('Dashboard fetch error 5:', err5);
 
             const { data: monthPoliciesData, count: monthPolicies, error: err6 } = await supabase
                 .from('policeler')
-                .select('id, kesen_id, net_prim, komisyon, tarih, tur') // Added tur
+                .select('id, kesen_id, net_prim, komisyon, tarih, tur') 
                 .gte('tarih', startOfMonth);
-            if (err6 && err6.code !== '20') throw err6;
+            if (err6 && err6.code !== '20') console.warn('Dashboard fetch error 6:', err6);
             
             const monthPremium = monthPoliciesData?.reduce((sum, p) => sum + (Number(p.net_prim) || 0), 0) || 0;
             const monthCommission = monthPoliciesData?.reduce((sum, p) => sum + (Number(p.komisyon) || 0), 0) || 0;
@@ -143,7 +143,7 @@ export default function AdminDashboard() {
                 .select('id, tarih, tur, kesen:users!kesen_id(name)')
                 .order('tarih', { ascending: false })
                 .limit(5);
-            if (err7 && err7.code !== '20') throw err7;
+            if (err7 && err7.code !== '20') console.warn('Dashboard fetch error 7:', err7);
 
             // --- Chart Data Preparation ---
             
@@ -168,12 +168,6 @@ export default function AdminDashboard() {
                 d.setHours(0,0,0,0);
                 const dateStr = d.toISOString().split('T')[0]; // YYYY-MM-DD
                 
-                // Count from month data (approximate) or fetch specific range if needed
-                // Ideally we fetch last 7 days data separately, but let's filter from fetched month data if applicable,
-                // or fetch specifically if month data doesn't cover last 7 days (e.g. beginning of month).
-                // For robustness, let's just filter monthQuotesData if within range, or fetch if needed.
-                // Simplified: Use monthQuotesData for current month days.
-                
                 const count = monthQuotesData?.filter(q => q.tarih.startsWith(dateStr)).length || 0;
                 last7Days.push({
                     day: d.toLocaleDateString('tr-TR', { weekday: 'short' }),
@@ -184,9 +178,6 @@ export default function AdminDashboard() {
             setDailyActivity(last7Days);
 
             // 3. Monthly Trend (Last 6 Months) - Needs separate fetch or aggregation
-            // For now, let's mock realistic trend based on current month + random history or fetch real.
-            // Let's fetch aggregation for last 6 months using RPC or multiple queries.
-            // Simplified: Just showing current month + placeholder previous
             setMonthlyTrend([
                 { month: 'Ağu', value: 15 },
                 { month: 'Eyl', value: 25 },

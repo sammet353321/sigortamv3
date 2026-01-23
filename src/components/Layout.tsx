@@ -1,12 +1,13 @@
 import { useAuth } from '@/context/AuthContext';
 import { useNotification } from '@/context/NotificationContext';
-import { LogOut, Bell, Shield, User, Users, FileText, BarChart3, Menu, X, MessageCircle, ShieldCheck, Smartphone } from 'lucide-react';
+import { LogOut, Bell, Shield, User, Users, FileText, BarChart3, Menu, X, MessageCircle, ShieldCheck, Smartphone, RefreshCw } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import clsx from 'clsx';
 import { supabase } from '@/lib/supabase';
 import GeminiTestModal from './GeminiTestModal';
 import QuickQuotePanel from './QuickQuotePanel'; // Import the new component
+import EmployeeNewQuote from '@/pages/employee/NewQuote'; // Import NewQuote directly
 
 export default function Layout() {
   const { user } = useAuth();
@@ -26,6 +27,9 @@ export default function Layout() {
   // Notification State (Now managed by Context, local state removed/minimized)
   const [isNotificationPanelOpen, setIsNotificationPanelOpen] = useState(false);
   // const [recentNotifications, setRecentNotifications] = useState<any[]>([]); // Derived from context now
+
+  // New State for Full Screen Quote Modal (Employee)
+  const [isEmployeeQuoteModalOpen, setIsEmployeeQuoteModalOpen] = useState(false);
 
 
   // Real-time Notification Listener
@@ -77,7 +81,14 @@ export default function Layout() {
     // However, simplest fix for ERR_ABORTED is to just fire and forget or await without strict dependency on result.
     // For now, removing explicit navigate(replace) to see if AuthContext handles it cleaner, 
     // OR keeping it but ensuring we catch the abort.
-    navigate('/login', { replace: true });
+    // navigate('/login', { replace: true });
+    // Force reload to clear all states if needed, or just let context redirect
+    window.location.href = '/login'; 
+  };
+
+  const handleOpenQuoteModal = () => {
+      // Use Query Parameter to force the quote panel to open
+      navigate('/employee/messages?open_quote=true');
   };
 
   if (!user) return null;
@@ -98,6 +109,7 @@ export default function Layout() {
     { label: 'Mesajlar', path: '/employee/messages', icon: MessageCircle, roles: ['employee'] },
     { label: 'WhatsApp Bağla', path: '/employee/whatsapp-connection', icon: Smartphone, roles: ['employee'] }, // New Link
     { label: 'Teklifler', path: '/employee/quotes', icon: FileText, roles: ['employee'] },
+    { label: 'Yenilemeler', path: '/employee/renewals', icon: RefreshCw, roles: ['employee'] },
     { label: 'Poliçeler', path: '/employee/policies', icon: Shield, roles: ['employee'] },
     
     // Sub-Agent Routes
@@ -112,7 +124,7 @@ export default function Layout() {
       {/* Test Modal */}
       <GeminiTestModal isOpen={isTestModalOpen} onClose={() => setIsTestModalOpen(false)} />
       
-      {/* Quick Quote Panel */}
+      {/* Quick Quote Panel (Legacy/Alternative) */}
       <QuickQuotePanel isOpen={isQuickQuoteOpen} onClose={() => setIsQuickQuoteOpen(false)} />
 
       {/* Main Container */}
@@ -152,7 +164,7 @@ export default function Layout() {
             <div className="p-4 border-t border-blue-800 hidden md:block">
                   {user.role === 'employee' && (
                       <button 
-                        onClick={() => setIsQuickQuoteOpen(true)}
+                        onClick={handleOpenQuoteModal}
                         className="flex items-center space-x-2 text-white bg-blue-600 hover:bg-blue-500 w-full px-4 py-2 rounded-lg mb-2 shadow-sm transition-all"
                       >
                         <FileText size={18} />
@@ -230,7 +242,7 @@ export default function Layout() {
                     <div className="p-4 border-t border-blue-800">
                          {user.role === 'employee' && (
                             <button 
-                                onClick={() => { setIsQuickQuoteOpen(true); setIsMobileMenuOpen(false); }}
+                                onClick={() => { handleOpenQuoteModal(); setIsMobileMenuOpen(false); }}
                                 className="flex items-center space-x-2 text-white bg-blue-600 w-full px-4 py-3 rounded-lg mb-4 justify-center"
                             >
                                 <FileText size={18} />

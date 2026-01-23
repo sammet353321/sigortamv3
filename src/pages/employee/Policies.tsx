@@ -13,6 +13,8 @@ export default function EmployeePoliciesPage() {
   const [policies, setPolicies] = useState<any[]>([]); 
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [filterType, setFilterType] = useState<string>('all');
+  const [uniqueTypes, setUniqueTypes] = useState<string[]>([]);
   
   // Action Modals State
   const [selectedPolicy, setSelectedPolicy] = useState<any>(null);
@@ -59,6 +61,37 @@ export default function EmployeePoliciesPage() {
   const handleRowClick = (policy: any) => {
       setSelectedPolicy(policy);
       setShowActionModal(true);
+  };
+
+  const handleCellContextMenu = (e: React.MouseEvent, text: string | number | null | undefined) => {
+      e.preventDefault();
+      if (!text) return;
+      const textToCopy = String(text);
+      
+      const copyToClipboard = async () => {
+        try {
+            if (navigator.clipboard && window.isSecureContext) {
+                await navigator.clipboard.writeText(textToCopy);
+                toast.success(`Kopyalandı: ${textToCopy}`, { id: 'copy', duration: 1000, icon: '📋' });
+            } else {
+                const textArea = document.createElement("textarea");
+                textArea.value = textToCopy;
+                textArea.style.position = "fixed";
+                textArea.style.left = "-9999px";
+                document.body.appendChild(textArea);
+                textArea.focus();
+                textArea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textArea);
+                toast.success(`Kopyalandı: ${textToCopy}`, { id: 'copy', duration: 1000, icon: '📋' });
+            }
+        } catch (err) {
+            console.error('Copy failed', err);
+            toast.error('Kopyalama başarısız');
+        }
+      };
+
+      copyToClipboard();
   };
 
   const openZeyil = (type: 'plaka' | 'arac' | 'iptal') => {
@@ -209,7 +242,9 @@ export default function EmployeePoliciesPage() {
         const date = p.dogum_tarihi ? format(new Date(p.dogum_tarihi), 'dd.MM.yyyy') : '';
         const createdDate = format(new Date(p.tarih), 'dd.MM.yyyy');
         const kesen = user?.name || 'Ben';
-        const ilgiliKisi = p.ilgili_kisi?.name || '';
+        // const ilgiliKisi = p.ilgili_kisi?.name || '';
+        // Prefer 'tali' column if available, else fallback to relation
+        const ilgiliKisi = p.tali || p.ilgili_kisi?.name || (p.misafir_bilgi as any)?.group_name || '';
         const kartLink = p.kart_bilgisi || '';
         return [
           `"${p.ad_soyad || ''}"`, `"${date}"`, `"${p.sirket || ''}"`, `"${createdDate}"`, `"${p.sasi_no || ''}"`,
@@ -352,6 +387,20 @@ export default function EmployeePoliciesPage() {
           </button>
           
           <div className="relative">
+            <Filter className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={18} />
+            <select 
+              className="pl-10 pr-8 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none appearance-none bg-white w-full sm:w-48"
+              value={filterType}
+              onChange={(e) => setFilterType(e.target.value)}
+            >
+              <option value="all">Tüm Ürünler</option>
+              {uniqueTypes.map(type => (
+                <option key={type} value={type}>{type}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="relative">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={18} />
             <input 
               type="text" 
@@ -407,23 +456,23 @@ export default function EmployeePoliciesPage() {
                     className="hover:bg-blue-50 transition-colors cursor-pointer group whitespace-nowrap"
                     onClick={() => handleRowClick(policy)}
                   >
-                    <td className="px-4 py-3 font-bold text-gray-900">{policy.ad_soyad || '-'}</td>
-                    <td className="px-4 py-3 text-gray-600">{policy.dogum_tarihi ? format(new Date(policy.dogum_tarihi), 'd.MM.yyyy') : '-'}</td>
-                    <td className="px-4 py-3 text-gray-600">{policy.sirket || '-'}</td>
-                    <td className="px-4 py-3 text-gray-600">{format(new Date(policy.tarih), 'd.MM.yyyy')}</td>
-                    <td className="px-4 py-3 font-mono text-xs">{policy.sasi_no || '-'}</td>
-                    <td className="px-4 py-3 font-bold">{policy.plaka || '-'}</td>
-                    <td className="px-4 py-3 font-mono">{policy.tc_vkn || '-'}</td>
-                    <td className="px-4 py-3 font-mono">{policy.belge_no || '-'}</td>
-                    <td className="px-4 py-3">{policy.arac_cinsi || '-'}</td>
-                    <td className="px-4 py-3 text-gray-600">{policy.brut_prim ? `₺${Number(policy.brut_prim).toLocaleString('tr-TR')}` : '-'}</td>
-                    <td className="px-4 py-3">{policy.tur || '-'}</td>
-                    <td className="px-4 py-3 text-gray-600">{(policy.kesen as any)?.name || 'Bilinmiyor'}</td>
-                    <td className="px-4 py-3 text-blue-600 font-medium">
-                        {(policy.ilgili_kisi as any)?.name || (policy.misafir_bilgi as any)?.group_name || 'Bilinmiyor'}
+                    <td onContextMenu={(e) => handleCellContextMenu(e, policy.ad_soyad)} className="px-4 py-3 font-bold text-gray-900">{policy.ad_soyad || '-'}</td>
+                    <td onContextMenu={(e) => handleCellContextMenu(e, policy.dogum_tarihi ? format(new Date(policy.dogum_tarihi), 'd.MM.yyyy') : '-')} className="px-4 py-3 text-gray-600">{policy.dogum_tarihi ? format(new Date(policy.dogum_tarihi), 'd.MM.yyyy') : '-'}</td>
+                    <td onContextMenu={(e) => handleCellContextMenu(e, policy.sirket)} className="px-4 py-3 text-gray-600">{policy.sirket || '-'}</td>
+                    <td onContextMenu={(e) => handleCellContextMenu(e, format(new Date(policy.tarih), 'd.MM.yyyy'))} className="px-4 py-3 text-gray-600">{format(new Date(policy.tarih), 'd.MM.yyyy')}</td>
+                    <td onContextMenu={(e) => handleCellContextMenu(e, policy.sasi_no)} className="px-4 py-3 font-mono text-xs">{policy.sasi_no || '-'}</td>
+                    <td onContextMenu={(e) => handleCellContextMenu(e, policy.plaka)} className="px-4 py-3 font-bold">{policy.plaka || '-'}</td>
+                    <td onContextMenu={(e) => handleCellContextMenu(e, policy.tc_vkn)} className="px-4 py-3 font-mono">{policy.tc_vkn || '-'}</td>
+                    <td onContextMenu={(e) => handleCellContextMenu(e, policy.belge_no)} className="px-4 py-3 font-mono">{policy.belge_no || '-'}</td>
+                    <td onContextMenu={(e) => handleCellContextMenu(e, policy.arac_cinsi)} className="px-4 py-3">{policy.arac_cinsi || '-'}</td>
+                    <td onContextMenu={(e) => handleCellContextMenu(e, policy.brut_prim)} className="px-4 py-3 text-gray-600">{policy.brut_prim ? `₺${Number(policy.brut_prim).toLocaleString('tr-TR')}` : '-'}</td>
+                    <td onContextMenu={(e) => handleCellContextMenu(e, policy.tur)} className="px-4 py-3">{policy.tur || '-'}</td>
+                    <td onContextMenu={(e) => handleCellContextMenu(e, (policy.kesen as any)?.name)} className="px-4 py-3 text-gray-600">{(policy.kesen as any)?.name || 'Bilinmiyor'}</td>
+                    <td onContextMenu={(e) => handleCellContextMenu(e, policy.tali || (policy.ilgili_kisi as any)?.name || (policy.misafir_bilgi as any)?.group_name)} className="px-4 py-3 text-blue-600 font-medium">
+                        {policy.tali || (policy.ilgili_kisi as any)?.name || (policy.misafir_bilgi as any)?.group_name || 'Bilinmiyor'}
                     </td>
-                    <td className="px-4 py-3 font-mono text-blue-600">{policy.police_no || '-'}</td>
-                    <td className="px-4 py-3 text-gray-600">{policy.acente || '-'}</td>
+                    <td onContextMenu={(e) => handleCellContextMenu(e, policy.police_no)} className="px-4 py-3 font-mono text-blue-600">{policy.police_no || '-'}</td>
+                    <td onContextMenu={(e) => handleCellContextMenu(e, policy.acente)} className="px-4 py-3 text-gray-600">{policy.acente || '-'}</td>
                     <td className="px-4 py-3 text-center">
                         {policy.kart_bilgisi ? (
                             policy.kart_bilgisi.startsWith('http') ? (
@@ -431,17 +480,17 @@ export default function EmployeePoliciesPage() {
                                     <Eye size={18} />
                                 </a>
                             ) : (
-                                <span className="text-xs font-medium text-gray-700">{policy.kart_bilgisi}</span>
+                                <span onContextMenu={(e) => handleCellContextMenu(e, policy.kart_bilgisi)} className="text-xs font-medium text-gray-700">{policy.kart_bilgisi}</span>
                             )
                         ) : '-'}
                     </td>
-                    <td className="px-4 py-3 text-gray-500 text-xs max-w-xs truncate">
+                    <td onContextMenu={(e) => handleCellContextMenu(e, policy.ek_bilgiler)} className="px-4 py-3 text-gray-500 text-xs max-w-xs truncate">
                         {policy.ek_bilgiler || '-'}
                     </td>
-                    <td className="px-4 py-3 font-bold text-gray-700">
+                    <td onContextMenu={(e) => handleCellContextMenu(e, policy.net_prim)} className="px-4 py-3 font-bold text-gray-700">
                       ₺{Number(policy.net_prim || 0).toLocaleString('tr-TR')}
                     </td>
-                    <td className="px-4 py-3 text-green-600 font-medium">
+                    <td onContextMenu={(e) => handleCellContextMenu(e, policy.komisyon)} className="px-4 py-3 text-green-600 font-medium">
                         {policy.komisyon ? `₺${Number(policy.komisyon).toLocaleString('tr-TR')}` : '-'}
                     </td>
                     <td className="px-4 py-3 text-right">

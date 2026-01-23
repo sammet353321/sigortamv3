@@ -73,15 +73,17 @@ export const analyzePolicyWithGemini = async (file: File) => {
             
             - sirket: Sigorta Şirketi Adı (Örn: NEOVA, ANADOLU, AXA, BEREKET, vb.)
             - acente: Acente Adı. (Örn: KOÇ SİGORTA, WİN GRUP, TİMURLAR vb.)
-            - bitis_tarihi: Poliçe Bitiş Tarihi (En ileri tarih). Format: YYYY-MM-DD.
+            - bitis_tarihi: Poliçe Bitiş Tarihi (En ileri tarih). Format: DD.MM.YYYY (Örn: 24.08.2026).
             - police_no: Poliçe Numarası.
-            - brut_prim: Toplam/Brüt Prim Tutarı (Sayısal, kuruşlu olabilir).
+            - brut_prim: Toplam/Brüt Prim Tutarı (Sayısal String, Örn: "19600,48" veya "1000,00").
             - net_prim: Net Prim Tutarı (Vergiler hariç).
             - komisyon: Acente Komisyon Tutarı (Varsa).
             
             Not:
             - Acente adı "KOÇ", "ACAR" içeriyorsa tam adını olduğu gibi al.
-            - "WİN" veya "WIN" içeriyorsa tam adını al.
+            - "WİN" veya "WIN" içeriyorsa "TİMURLAR" olarak al.
+            - Tarihleri KESİNLİKLE GG.AA.YYYY formatında döndür (Örn: 24.08.2026). Asla YYYY-MM-DD kullanma.
+            - Sayısal değerlerde binlik ayracı kullanma, ondalık ayracı olarak VİRGÜL (,) kullan. (Örn: 15000,50).
             
             Yanıt JSON olmalı. Markdown kullanma.
         `;

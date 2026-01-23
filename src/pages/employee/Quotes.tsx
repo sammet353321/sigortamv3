@@ -7,6 +7,7 @@ import { tr } from 'date-fns/locale';
 import { Search, Filter, Eye, ArrowRight, Download } from 'lucide-react';
 import StatusBadge from '@/components/StatusBadge';
 import { useNavigate } from 'react-router-dom';
+import toast from 'react-hot-toast';
 
 export default function EmployeeQuotesPage() {
   const { user } = useAuth();
@@ -15,18 +16,49 @@ export default function EmployeeQuotesPage() {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('all');
+  const [filterType, setFilterType] = useState<string>('all');
+  const [uniqueTypes, setUniqueTypes] = useState<string[]>([]);
 
   useEffect(() => {
     fetchQuotes();
   }, [user]);
+
+  const handleCellContextMenu = (e: React.MouseEvent, text: string | number | null | undefined) => {
+      e.preventDefault();
+      if (!text) return;
+      const textToCopy = String(text);
+      
+      const copyToClipboard = async () => {
+        try {
+            if (navigator.clipboard && window.isSecureContext) {
+                await navigator.clipboard.writeText(textToCopy);
+                toast.success(`Kopyalandı: ${textToCopy}`, { id: 'copy', duration: 1000, icon: '📋' });
+            } else {
+                const textArea = document.createElement("textarea");
+                textArea.value = textToCopy;
+                textArea.style.position = "fixed";
+                textArea.style.left = "-9999px";
+                document.body.appendChild(textArea);
+                textArea.focus();
+                textArea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textArea);
+                toast.success(`Kopyalandı: ${textToCopy}`, { id: 'copy', duration: 1000, icon: '📋' });
+            }
+        } catch (err) {
+            console.error('Copy failed', err);
+            toast.error('Kopyalama başarısız');
+        }
+      };
+
+      copyToClipboard();
+  };
 
   const fetchQuotes = async () => {
     if (!user) return;
     
     try {
       setLoading(true);
-      // Fetch all quotes for employees to see pool
-      // User requested "bütün çalışanların teklifi çıksın"
       const { data, error } = await supabase
         .from('teklifler')
         .select('*, ilgili_kisi:users!ilgili_kisi_id(name), kesen:users!kesen_id(name)')
@@ -34,6 +66,10 @@ export default function EmployeeQuotesPage() {
 
       if (error) throw error;
       setQuotes(data as any || []);
+      
+      const types = Array.from(new Set(data?.map((q: any) => q.tur).filter(Boolean) as string[]));
+      setUniqueTypes(types);
+
     } catch (error) {
       console.error('Error fetching quotes:', error);
     } finally {
@@ -49,8 +85,9 @@ export default function EmployeeQuotesPage() {
       ((quote as any).ilgili_kisi?.name?.toLowerCase().includes(searchLower) || '');
 
     const matchesStatus = filterStatus === 'all' || quote.durum === filterStatus;
+    const matchesType = filterType === 'all' || quote.tur === filterType;
 
-    return matchesSearch && matchesStatus;
+    return matchesSearch && matchesStatus && matchesType;
   });
 
   const downloadExcel = () => {
@@ -132,6 +169,20 @@ export default function EmployeeQuotesPage() {
             <Filter className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={18} />
             <select 
               className="pl-10 pr-8 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none appearance-none bg-white w-full sm:w-48"
+              value={filterType}
+              onChange={(e) => setFilterType(e.target.value)}
+            >
+              <option value="all">Tüm Ürünler</option>
+              {uniqueTypes.map(type => (
+                <option key={type} value={type}>{type}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="relative">
+            <Filter className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={18} />
+            <select 
+              className="pl-10 pr-8 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none appearance-none bg-white w-full sm:w-48"
               value={filterStatus}
               onChange={(e) => setFilterStatus(e.target.value)}
             >
@@ -192,25 +243,27 @@ export default function EmployeeQuotesPage() {
                     className={`transition-colors group whitespace-nowrap ${quote.durum === 'policelesti' ? 'bg-gray-50 cursor-default opacity-75' : 'hover:bg-blue-50 cursor-pointer'}`}
                     onClick={() => {
                         if (quote.durum !== 'policelesti') {
-                            navigate(`/employee/quotes/${quote.id}`);
+                            navigate(`/employee/policies/cut/${quote.id}`);
                         }
                     }}
                   >
-                    <td className="px-4 py-3 font-bold text-gray-900">{quote.ad_soyad || '-'}</td>
-                    <td className="px-4 py-3 text-gray-600">{quote.dogum_tarihi ? format(new Date(quote.dogum_tarihi), 'd.MM.yyyy') : '-'}</td>
-                    <td className="px-4 py-3 text-gray-600">-</td>
-                    <td className="px-4 py-3 text-gray-600">{format(new Date(quote.guncellenme_tarihi || quote.tarih), 'd.MM.yyyy HH:mm')}</td>
-                    <td className="px-4 py-3 font-mono text-xs">{quote.sasi_no || '-'}</td>
-                    <td className="px-4 py-3 font-bold">{quote.plaka || '-'}</td>
-                    <td className="px-4 py-3 font-mono">{quote.tc_vkn || '-'}</td>
-                    <td className="px-4 py-3 font-mono">{quote.belge_no || '-'}</td>
-                    <td className="px-4 py-3">{quote.arac_cinsi || '-'}</td>
-                    <td className="px-4 py-3 text-gray-600">-</td>
-                    <td className="px-4 py-3">{quote.tur || '-'}</td>
-                    <td className="px-4 py-3 text-gray-600">{(quote as any).kesen?.name || '-'}</td>
-                    <td className="px-4 py-3 text-blue-600 font-medium">{(quote as any).ilgili_kisi?.name || 'Bilinmiyor'}</td>
-                    <td className="px-4 py-3 text-gray-600">{quote.police_no || '-'}</td>
-                    <td className="px-4 py-3 text-gray-600">-</td>
+                    <td onContextMenu={(e) => handleCellContextMenu(e, quote.ad_soyad)} className="px-4 py-3 font-bold text-gray-900">{quote.ad_soyad || '-'}</td>
+                    <td onContextMenu={(e) => handleCellContextMenu(e, quote.dogum_tarihi ? format(new Date(quote.dogum_tarihi), 'd.MM.yyyy') : '-')} className="px-4 py-3 text-gray-600">{quote.dogum_tarihi ? format(new Date(quote.dogum_tarihi), 'd.MM.yyyy') : '-'}</td>
+                    <td onContextMenu={(e) => handleCellContextMenu(e, '-')} className="px-4 py-3 text-gray-600">-</td>
+                    <td onContextMenu={(e) => handleCellContextMenu(e, format(new Date(quote.guncellenme_tarihi || quote.tarih), 'd.MM.yyyy HH:mm'))} className="px-4 py-3 text-gray-600">{format(new Date(quote.guncellenme_tarihi || quote.tarih), 'd.MM.yyyy HH:mm')}</td>
+                    <td onContextMenu={(e) => handleCellContextMenu(e, quote.sasi_no)} className="px-4 py-3 font-mono text-xs">{quote.sasi_no || '-'}</td>
+                    <td onContextMenu={(e) => handleCellContextMenu(e, quote.plaka)} className="px-4 py-3 font-bold">{quote.plaka || '-'}</td>
+                    <td onContextMenu={(e) => handleCellContextMenu(e, quote.tc_vkn)} className="px-4 py-3 font-mono">{quote.tc_vkn || '-'}</td>
+                    <td onContextMenu={(e) => handleCellContextMenu(e, quote.belge_no)} className="px-4 py-3 font-mono">{quote.belge_no || '-'}</td>
+                    <td onContextMenu={(e) => handleCellContextMenu(e, quote.arac_cinsi)} className="px-4 py-3">{quote.arac_cinsi || '-'}</td>
+                    <td onContextMenu={(e) => handleCellContextMenu(e, '-')} className="px-4 py-3 text-gray-600">-</td>
+                    <td onContextMenu={(e) => handleCellContextMenu(e, quote.tur)} className="px-4 py-3">{quote.tur || '-'}</td>
+                    <td onContextMenu={(e) => handleCellContextMenu(e, (quote as any).kesen?.name)} className="px-4 py-3 text-gray-600">{(quote as any).kesen?.name || '-'}</td>
+                    <td onContextMenu={(e) => handleCellContextMenu(e, (quote as any).tali || (quote as any).ilgili_kisi?.name)} className="px-4 py-3 text-blue-600 font-medium">
+                        {(quote as any).tali || (quote as any).ilgili_kisi?.name || 'Bilinmiyor'}
+                    </td>
+                    <td onContextMenu={(e) => handleCellContextMenu(e, quote.police_no)} className="px-4 py-3 text-gray-600">{quote.police_no || '-'}</td>
+                    <td onContextMenu={(e) => handleCellContextMenu(e, '-')} className="px-4 py-3 text-gray-600">-</td>
                     <td className="px-4 py-3 text-center">
                         {quote.kart_bilgisi ? (
                             <a href={quote.kart_bilgisi} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="text-blue-500 hover:text-blue-700">
@@ -218,11 +271,11 @@ export default function EmployeeQuotesPage() {
                             </a>
                         ) : '-'}
                     </td>
-                    <td className="px-4 py-3 text-gray-500 text-xs max-w-xs truncate" title={quote.ek_bilgiler || ''}>
+                    <td onContextMenu={(e) => handleCellContextMenu(e, quote.ek_bilgiler || quote.misafir_bilgi?.phone)} className="px-4 py-3 text-gray-500 text-xs max-w-xs truncate" title={quote.ek_bilgiler || ''}>
                         {quote.ek_bilgiler || quote.misafir_bilgi?.phone || '-'}
                     </td>
-                    <td className="px-4 py-3 text-gray-600">-</td>
-                    <td className="px-4 py-3 text-gray-600">-</td>
+                    <td onContextMenu={(e) => handleCellContextMenu(e, '-')} className="px-4 py-3 text-gray-600">-</td>
+                    <td onContextMenu={(e) => handleCellContextMenu(e, '-')} className="px-4 py-3 text-gray-600">-</td>
                     <td className="px-4 py-3">
                       <StatusBadge status={quote.durum} />
                     </td>

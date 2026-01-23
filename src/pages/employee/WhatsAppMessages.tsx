@@ -1,9 +1,10 @@
-import { useState, useEffect, useRef, useLayoutEffect } from 'react';
+import { useState, useEffect, useRef, useLayoutEffect, useMemo } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
-import { Search, Send, Paperclip, FileText, User, Users, ChevronDown, X, ZoomIn, ZoomOut, RotateCcw, Filter } from 'lucide-react';
+import { Search, Send, Paperclip, FileText, User, Users, ChevronDown, X, ZoomIn, ZoomOut, RotateCcw, Filter, Car, Ban } from 'lucide-react';
 import { format } from 'date-fns';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom'; // Import useSearchParams
+import EmployeeNewQuote from './NewQuote';
 
 interface ChatGroup {
     id: string;
@@ -27,6 +28,7 @@ interface Message {
     media_url: string | null;
     created_at: string;
     group_id?: string;
+    user_id?: string;
 }
 
 interface EmployeeGroup {
@@ -37,6 +39,7 @@ interface EmployeeGroup {
 export default function WhatsAppMessages() {
     const { user } = useAuth();
     const navigate = useNavigate();
+    const [searchParams] = useSearchParams(); // Hook
     
     const [groups, setGroups] = useState<ChatGroup[]>([]);
     const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
@@ -55,10 +58,14 @@ export default function WhatsAppMessages() {
     // Image Viewer State
     const [viewerImage, setViewerImage] = useState<string | null>(null);
     const [zoomLevel, setZoomLevel] = useState(1);
+    const [rotation, setRotation] = useState(0);
     const [panPosition, setPanPosition] = useState({ x: 0, y: 0 });
     const [isDragging, setIsDragging] = useState(false);
     const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
     const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+    // Split Screen Quote Panel State
+    const [quotePanel, setQuotePanel] = useState<{ isOpen: boolean; data: any }>({ isOpen: false, data: null });
 
     // Quote Modal State
     const [quoteModal, setQuoteModal] = useState<{ isOpen: boolean; imgUrl: string | null; phone: string | null }>({ isOpen: false, imgUrl: null, phone: null });
@@ -68,6 +75,23 @@ export default function WhatsAppMessages() {
     const [isWhatsAppConnected, setIsWhatsAppConnected] = useState<boolean | null>(null);
     const [myPhone, setMyPhone] = useState<string | null>(null);
 
+    // Check for openQuotePanel in navigation state or query params
+    useEffect(() => {
+        const state = location.state as any;
+        const openQuoteQuery = searchParams.get('open_quote') === 'true';
+
+        // Only auto-open panel if we have a signal AND it's not already open
+        if ((state?.openQuotePanel || openQuoteQuery) && !quotePanel.isOpen) {
+             setQuotePanel({
+                 isOpen: true,
+                 data: {
+                     quoteType: 'TRAFİK', 
+                     groupId: selectedGroupId 
+                 }
+             });
+        }
+    }, [location.state, searchParams]); // Don't depend on quotePanel.isOpen to avoid loops
+    
     // ESC to close viewer
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
@@ -144,10 +168,11 @@ export default function WhatsAppMessages() {
 
     // 2. Fetch Chat Groups based on Filter
     useEffect(() => {
+        // Always fetch groups if activeFilter is set
         if (activeFilter) {
             fetchChatGroups();
         }
-    }, [activeFilter, myGroupIds]); // Re-fetch when filter or myGroups changes
+    }, [activeFilter, myGroupIds]); 
 
     async function fetchChatGroups() {
         try {
@@ -155,34 +180,26 @@ export default function WhatsAppMessages() {
 
             if (activeFilter === 'my_groups') {
                 if (myGroupIds.length === 0) {
+                    // If employee has no assigned groups, show nothing? 
+                    // OR show groups explicitly added to (via chat_group_members)?
+                    // For now, empty list is correct based on logic.
                     query = query.in('assigned_employee_group_id', []); 
                 } else {
                     query = query.in('assigned_employee_group_id', myGroupIds);
                 }
             } else if (activeFilter === 'all') {
-                // Sadece benim üyesi olduğum WhatsApp gruplarını getir
-                // (Admin ise hepsini görebilir, çalışan ise sadece dahil olduklarını)
                 if (user?.role !== 'admin') {
-                     // Get list of group IDs where I am a member
-                     // const { data: memberOf } = await supabase
-                     //    .from('chat_group_members')
-                     //    .select('group_id')
-                     //    .eq('phone', myPhone || ''); // Backend needs to sync my phone first
-                     
-                     // Fallback: If phone not synced yet, maybe use assigned_employee_group_id logic?
-                     // Or just show assigned groups + any group I'm explicitly added to.
-                     // For now, let's stick to 'assigned_employee_group_id' logic for simplicity + explicit memberships
-                     
-                     // Actually, user wants 'all' to mean "All groups I have access to via categories".
-                     // So if I have access to Category A (3 groups) and Category B (2 groups), 'all' should show 5 groups.
-                     
+                     // Employee "All" view: 
+                     // Show assigned groups (via categories) AND groups where I am explicitly a member?
+                     // Currently only showing assigned categories for simplicity.
                      if (myGroupIds.length > 0) {
                          query = query.in('assigned_employee_group_id', myGroupIds);
                      } else {
-                         // If no categories assigned, show nothing (or just explicit memberships)
+                         // Fallback: If no category assigned, maybe show nothing
                          query = query.in('id', []);
                      }
                 }
+                // Admin sees all, no filter needed
             } else {
                 // Specific Employee Group
                 query = query.eq('assigned_employee_group_id', activeFilter);
@@ -190,8 +207,12 @@ export default function WhatsAppMessages() {
 
             const { data } = await query;
             setGroups(data || []);
+            
+            // Auto-select first group if only one available
+            if (data && data.length === 1 && !selectedGroupId) {
+                setSelectedGroupId(data[0].id);
+            }
 
-            // Auto-select logic...
         } catch (error) {
             console.error('Error fetching chat groups:', error);
         }
@@ -221,6 +242,13 @@ export default function WhatsAppMessages() {
     // 3. Fetch Group Details (Members & Messages) when group selected
     useEffect(() => {
         if (selectedGroupId) {
+            // If quote panel is open, we update its context too if needed
+            if (quotePanel.isOpen) {
+                 setQuotePanel(prev => ({
+                     ...prev,
+                     data: { ...prev.data, groupId: selectedGroupId }
+                 }));
+            }
             fetchGroupMembers();
         }
     }, [selectedGroupId]);
@@ -329,15 +357,56 @@ export default function WhatsAppMessages() {
                 filter: `group_id=eq.${selectedGroupId}` // Filter by Group ID directly
             }, (payload) => {
                 const newMsg = payload.new as any;
+
+                // Frontend Echo Prevention
+                    if (newMsg.direction === 'inbound') {
+                         const normalize = (p: string) => String(p || '').replace(/\D/g, '').slice(-10);
+                         
+                         const sPhone10 = normalize(newMsg.sender_phone);
+                         const myPhone10 = normalize(myPhone);
+                         
+                         // If we know our phone, and sender matches (Last 10 digits) -> Ignore
+                         if (sPhone10 && myPhone10 && sPhone10 === myPhone10) {
+                             return;
+                         }
+
+                     // Extra Safety: If message ID starts with BAE5 (Baileys Outbound), ignore as inbound
+                     if (newMsg.wa_message_id && newMsg.wa_message_id.startsWith('BAE5')) {
+                         return;
+                     }
+                }
                 
                 setMessages(prev => {
-                    const existingTempIndex = prev.findIndex(m => m.content === newMsg.content && m.id.startsWith('temp-'));
+                    // Improved Dedup: Check for temp message with same content
+                    
+                    // 1. Try to find a temp message that matches content
+                    // We use loose equality and trim to handle potential minor diffs
+                    const existingTempIndex = prev.findIndex(m => 
+                        m.id.startsWith('temp-') && 
+                        m.direction === newMsg.direction &&
+                        (m.content == newMsg.content || m.content?.trim() == newMsg.content?.trim())
+                    );
+
                     if (existingTempIndex !== -1) {
+                        // Replace temp message with real one
                         const newMessages = [...prev];
                         newMessages[existingTempIndex] = newMsg;
                         return newMessages;
                     }
+
+                    // 2. Prevent ID duplicates
                     if (prev.some(m => m.id === newMsg.id)) return prev;
+
+                    // ECHO CHECK 3: Check against recent Outbound messages in state (Optimistic UI match)
+                    if (newMsg.direction === 'inbound') {
+                        const hasMatchingTemp = prev.some(m => 
+                            m.id.startsWith('temp-') && 
+                            m.direction === 'outbound' &&
+                            (m.content == newMsg.content || m.content?.trim() == newMsg.content?.trim())
+                        );
+                        if (hasMatchingTemp) return prev;
+                    }
+
                     return [...prev, newMsg];
                 });
                 
@@ -349,7 +418,7 @@ export default function WhatsAppMessages() {
             .subscribe();
 
         return () => { supabase.removeChannel(channel); };
-    }, [selectedGroupId]);
+    }, [selectedGroupId, user?.id, myPhone]);
 
     // Use useLayoutEffect for immediate scroll
     useLayoutEffect(() => {
@@ -357,6 +426,45 @@ export default function WhatsAppMessages() {
             messagesEndRef.current.scrollIntoView({ behavior: 'auto' });
         }
     }, [messages]);
+
+    // Filter out Echo messages (Inbound messages that are identical to recent Outbound messages)
+    const filteredMessages = useMemo(() => {
+        // Ensure sorted by date
+        const sorted = [...messages].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+        const result: Message[] = [];
+        const recentOutbound = new Map<string, number>(); // Key: content+phone, Value: timestamp
+
+        for (const msg of sorted) {
+            const time = new Date(msg.created_at).getTime();
+            // Use content and sender_phone as key. 
+            // Note: sender_phone is the Customer's phone for both Inbound and Outbound in this system architecture.
+            const key = `${msg.content?.trim()}|${msg.sender_phone}`;
+
+            if (msg.direction === 'outbound') {
+                recentOutbound.set(key, time);
+                result.push(msg);
+            } else {
+                // 1. Strict Echo Prevention by User ID (Works even if phone fetch fails)
+            if (user?.id && msg.user_id === user.id && msg.direction === 'inbound') {
+                continue;
+            }
+
+            // 2. Strict Echo Prevention by Phone
+            if (myPhone && msg.sender_phone === myPhone) {
+                continue;
+            }
+
+                const lastOutboundTime = recentOutbound.get(key);
+                // Check if we saw this EXACT content sent to this EXACT person within last 5 minutes
+                if (lastOutboundTime && (time - lastOutboundTime) < 5 * 60 * 1000) { 
+                     // It's a duplicate echo! Skip it.
+                     continue;
+                }
+                result.push(msg);
+            }
+        }
+        return result;
+    }, [messages, myPhone]);
 
     const handleSendMessage = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -439,21 +547,31 @@ export default function WhatsAppMessages() {
 
     const handleCopyImage = async (url: string) => {
         try {
+            // Check if ClipboardItem is defined (Secure Context check)
+            if (typeof ClipboardItem === 'undefined') {
+                throw new Error('ClipboardAPI_Unavailable');
+            }
+
             const response = await fetch(url);
             const blob = await response.blob();
             const pngBlob = await convertToPng(blob);
             const item = new ClipboardItem({ [pngBlob.type]: pngBlob });
             await navigator.clipboard.write([item]);
             showToast('Görsel panoya kopyalandı!');
-        } catch (err) {
+        } catch (err: any) {
             console.error('Copy failed:', err);
-            showToast('Kopyalama başarısız.');
+            if (err.message === 'ClipboardAPI_Unavailable' || err.name === 'ReferenceError') {
+                showToast('Tarayıcı güvenliği nedeniyle kopyalanamadı. Resmi açıp sağ tıkla kopyalayınız.');
+            } else {
+                showToast('Kopyalama başarısız.');
+            }
         }
     };
 
     const openViewer = (url: string) => {
         setViewerImage(url);
         setZoomLevel(1);
+        setRotation(0);
         setPanPosition({ x: 0, y: 0 });
     };
 
@@ -477,6 +595,112 @@ export default function WhatsAppMessages() {
     };
 
     const handleMouseUp = () => setIsDragging(false);
+
+    const handleSendQuoteResponse = async (textMessages: string[], files: File[]) => {
+        if (!selectedGroupId || !selectedTargetMember) {
+            showToast('Grup veya kişi seçili değil!');
+            return;
+        }
+
+        try {
+            // 1. Send Text Messages
+            for (const text of textMessages) {
+                if (!text) continue;
+                
+                // Optimistic UI
+                const tempId = 'temp-' + Date.now() + Math.random();
+                setMessages(prev => [...prev, {
+                    id: tempId,
+                    sender_phone: selectedTargetMember.phone,
+                    direction: 'outbound',
+                    type: 'text',
+                    content: text,
+                    media_url: null,
+                    created_at: new Date().toISOString()
+                }]);
+
+                const { error } = await supabase.from('messages').insert({
+                    group_id: selectedGroupId,
+                    sender_phone: selectedTargetMember.phone,
+                    direction: 'outbound',
+                    type: 'text',
+                    content: text,
+                    status: 'pending',
+                    user_id: user?.id
+                });
+
+                if (error) console.error('Error sending text:', error);
+            }
+
+            // 2. Upload and Send Files
+            for (const file of files) {
+                // If the file is just a blob without name (like from clipboard), give it a name
+                const originalName = file.name || 'image.png';
+                const fileExt = originalName.split('.').pop() || 'png';
+                const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`;
+                const filePath = `${selectedGroupId}/${fileName}`;
+
+                // Ensure file has type
+                const fileOptions = {
+                    cacheControl: '3600',
+                    upsert: false,
+                    contentType: file.type || 'image/png'
+                };
+
+                const { error: uploadError } = await supabase.storage
+                    .from('chat-media')
+                    .upload(filePath, file, fileOptions);
+
+                if (uploadError) {
+                    console.error('Upload error:', uploadError);
+                    showToast(`Dosya yüklenemedi: ${uploadError.message}`);
+                    continue;
+                }
+
+                const { data: { publicUrl } } = supabase.storage
+                    .from('chat-media')
+                    .getPublicUrl(filePath);
+
+                // Optimistic UI for Image
+                const tempId = 'temp-img-' + Date.now() + Math.random();
+                
+                // Do NOT add to local state here if realtime subscription is active, 
+                // as it will cause duplicate (echo). 
+                // But we want immediate feedback.
+                // We'll rely on our dedup logic in realtime listener.
+                
+                setMessages(prev => [...prev, {
+                    id: tempId,
+                    sender_phone: selectedTargetMember.phone,
+                    direction: 'outbound',
+                    type: 'image', 
+                    content: '',
+                    media_url: publicUrl,
+                    created_at: new Date().toISOString()
+                }]);
+
+                const { error: msgError } = await supabase.from('messages').insert({
+                    group_id: selectedGroupId,
+                    sender_phone: selectedTargetMember.phone,
+                    direction: 'outbound',
+                    type: 'image',
+                    content: '',
+                    media_url: publicUrl,
+                    status: 'pending',
+                    user_id: user?.id
+                });
+                 if (msgError) console.error('Error sending file msg:', msgError);
+            }
+            
+            showToast('Teklif ve belgeler gönderildi!');
+            // DO NOT close panel
+            // setQuotePanel({ isOpen: false, data: null }); 
+
+        } catch (error) {
+            console.error('Send quote error:', error);
+            showToast('Gönderim sırasında hata oluştu.');
+        }
+    };
 
     if (isWhatsAppConnected === null) {
         return (
@@ -509,9 +733,9 @@ export default function WhatsAppMessages() {
     }
 
     return (
-        <div className="flex h-full bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden relative">
-            {/* Sidebar: Groups */}
-            <div className="w-1/4 border-r border-gray-200 flex flex-col bg-gray-50">
+        <div className={`flex h-full bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden ${quotePanel.isOpen ? 'fixed inset-0 z-50 rounded-none' : 'relative'}`}>
+            {/* Sidebar: Groups - Fixed width 320px, hidden on small screens if quote open */}
+            <div className={`w-[320px] shrink-0 border-r border-gray-200 flex-col bg-gray-50 ${quotePanel.isOpen ? 'hidden lg:flex' : 'flex'}`}>
                 {/* Filter Tabs */}
                 <div className="px-3 pt-3 pb-1 bg-white border-b border-gray-100">
                     <div className="flex space-x-2 overflow-x-auto pb-2 scrollbar-hide">
@@ -596,8 +820,8 @@ export default function WhatsAppMessages() {
                 </div>
             </div>
 
-            {/* Chat Area */}
-            <div className="flex-1 flex flex-col bg-[#e5ddd5] relative">
+            {/* Chat Area - Flexible width */}
+            <div className="flex-1 min-w-0 flex flex-col bg-[#e5ddd5] relative">
                 <div className="absolute inset-0 opacity-10 pointer-events-none" style={{ backgroundImage: 'url("https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png")' }}></div>
                 {/* Chat Header */}
                 <div className="p-3 bg-white border-b border-gray-200 flex justify-between items-center shadow-sm z-10">
@@ -639,9 +863,10 @@ export default function WhatsAppMessages() {
 
                 {/* Messages */}
                 <div className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0 relative z-0">
-                    {messages.map((msg) => {
+                    {filteredMessages.map((msg) => {
                         const member = groupMembers.find(m => m.phone === msg.sender_phone);
-                        const senderName = member?.name || member?.phone || msg.sender_phone;
+                        // Priority: Manually assigned name -> WhatsApp PushName -> Phone
+                        const senderName = member?.name || msg.sender_name || member?.phone || msg.sender_phone;
 
                         return (
                             <div 
@@ -654,33 +879,73 @@ export default function WhatsAppMessages() {
                                 <div className={`max-w-[70%] rounded-lg p-3 shadow-sm relative ${
                                     msg.direction === 'outbound' ? 'bg-[#d9fdd3] rounded-tr-none' : 'bg-white rounded-tl-none'
                                 }`}>
-                                    {msg.type === 'image' && (
+                                    {msg.type === 'image' && msg.media_url && (
                                         <div className="mb-2">
-                                            {msg.media_url ? (
-                                                <img 
-                                                    src={msg.media_url} 
-                                                    alt="Görsel" 
-                                                    onClick={() => handleCopyImage(msg.media_url!)}
-                                                    onContextMenu={(e) => {
-                                                        e.preventDefault();
-                                                        openViewer(msg.media_url!);
-                                                    }}
-                                                    className="rounded-lg max-h-60 object-cover cursor-pointer hover:opacity-90 transition-opacity"
-                                                    title="Kopyalamak için sol tık, Büyütmek için sağ tık"
-                                                />
-                                            ) : null}
+                                            <img 
+                                                src={msg.media_url} 
+                                                alt="Görsel" 
+                                                onClick={() => openViewer(msg.media_url!)}
+                                                onContextMenu={(e) => {
+                                                    e.preventDefault();
+                                                    handleCopyImage(msg.media_url!);
+                                                }}
+                                                className="rounded-lg max-h-60 object-cover cursor-pointer hover:opacity-90 transition-opacity"
+                                                title="Büyütmek için sol tık, Kopyalamak için sağ tık"
+                                            />
                                             {msg.direction === 'inbound' && (
-                                                <button 
-                                                    onClick={() => setQuoteModal({ isOpen: true, imgUrl: msg.media_url!, phone: msg.sender_phone })}
-                                                    className="mt-2 w-full bg-blue-600 hover:bg-blue-700 text-white text-xs py-2 rounded flex items-center justify-center transition-colors"
-                                                >
-                                                    <FileText size={14} className="mr-1" />
-                                                    Teklif Hesapla
-                                                </button>
+                                                <div className="flex gap-1 mt-2">
+                                                    <button 
+                                                        onClick={() => {
+                                                            setQuotePanel({
+                                                                isOpen: true,
+                                                                data: {
+                                                                    source: 'whatsapp',
+                                                                    imageUrl: msg.media_url!,
+                                                                    customerPhone: msg.sender_phone,
+                                                                    quoteType: 'TRAFİK',
+                                                                    autoScan: true
+                                                                }
+                                                            });
+                                                        }}
+                                                        className="flex-1 bg-blue-600 hover:bg-blue-700 text-white text-[10px] py-1 rounded flex items-center justify-center transition-colors font-medium shadow-sm"
+                                                    >
+                                                        <FileText size={12} className="mr-1" />
+                                                        TRAFİK
+                                                    </button>
+                                                    <button 
+                                                        onClick={() => {
+                                                            setQuotePanel({
+                                                                isOpen: true,
+                                                                data: {
+                                                                    source: 'whatsapp',
+                                                                    imageUrl: msg.media_url!,
+                                                                    customerPhone: msg.sender_phone,
+                                                                    quoteType: 'KASKO',
+                                                                    autoScan: true
+                                                                }
+                                                            });
+                                                        }}
+                                                        className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] py-1 rounded flex items-center justify-center transition-colors font-medium shadow-sm"
+                                                    >
+                                                        <Car size={12} className="mr-1" />
+                                                        KASKO
+                                                    </button>
+                                                    <button 
+                                                        onClick={() => {
+                                                            // TODO: Implement Cancel Logic
+                                                            showToast('İptal özelliği yakında eklenecek.');
+                                                        }}
+                                                        className="flex-1 bg-red-600 hover:bg-red-700 text-white text-[10px] py-1 rounded flex items-center justify-center transition-colors font-medium shadow-sm"
+                                                    >
+                                                        <Ban size={12} className="mr-1" />
+                                                        İPTAL
+                                                    </button>
+                                                </div>
                                             )}
                                         </div>
                                     )}
 
+                                    {/* Fallback for broken images or text messages */}
                                     {msg.content && <p className="text-sm text-gray-800 whitespace-pre-wrap">{msg.content}</p>}
                                     
                                     <span className="text-[10px] text-gray-500 block text-right mt-1">
@@ -724,114 +989,65 @@ export default function WhatsAppMessages() {
                     </div>
                 )}
 
-                {/* Quote Creation Modal */}
-                {quoteModal.isOpen && (
-                    <div className="fixed inset-0 bg-black/50 z-[80] flex items-center justify-center p-4">
-                        <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-                            {/* Header */}
-                            <div className="bg-white px-6 py-4 border-b border-gray-100 flex justify-between items-center">
-                                <h3 className="text-lg font-bold text-gray-900">Hızlı Teklif Oluştur</h3>
-                                <button 
-                                    onClick={() => setQuoteModal({ isOpen: false, imgUrl: null, phone: null })}
-                                    className="text-gray-400 hover:text-gray-600 transition-colors"
-                                >
-                                    <X size={24} />
-                                </button>
-                            </div>
-                            
-                            {/* Body */}
-                            <div className="p-6">
-                                <div className="grid grid-cols-2 gap-4">
-                                    {['TRAFİK', 'KASKO', 'DASK', 'KONUT', 'İŞYERİ', 'TSS'].map((type) => (
-                                        <button
-                                            key={type}
-                                            onClick={() => {
-                                                navigate('/employee/quotes/new', { 
-                                                    state: { 
-                                                        source: 'whatsapp',
-                                                        imageUrl: quoteModal.imgUrl,
-                                                        customerPhone: quoteModal.phone,
-                                                        quoteType: type,
-                                                        autoScan: true 
-                                                    } 
-                                                });
-                                                setQuoteModal({ isOpen: false, imgUrl: null, phone: null });
-                                            }}
-                                            className="py-4 px-2 border border-gray-200 rounded-lg text-gray-800 font-bold hover:bg-blue-50 hover:border-blue-200 hover:text-blue-700 transition-all text-center text-sm shadow-sm"
-                                        >
-                                            {type}
-                                        </button>
-                                    ))}
-                                    
-                                    {/* ÖSS Single Row */}
-                                    <button
-                                        onClick={() => {
-                                             navigate('/employee/quotes/new', { 
-                                                state: { 
-                                                    source: 'whatsapp',
-                                                    imageUrl: quoteModal.imgUrl,
-                                                    customerPhone: quoteModal.phone,
-                                                    quoteType: 'ÖSS',
-                                                    autoScan: true 
-                                                } 
-                                            });
-                                            setQuoteModal({ isOpen: false, imgUrl: null, phone: null });
-                                        }}
-                                        className="py-4 px-2 border border-gray-200 rounded-lg text-gray-800 font-bold hover:bg-blue-50 hover:border-blue-200 hover:text-blue-700 transition-all text-center text-sm shadow-sm"
-                                    >
-                                        ÖSS
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                )}
-
-                {/* Image Viewer Modal */}
-                {viewerImage && (
-                    <div 
-                        className="absolute inset-0 bg-black/90 z-[60] flex items-center justify-center overflow-hidden"
-                        onWheel={handleWheel}
-                    >
-                        {/* Controls */}
-                        <div className="absolute top-4 right-4 flex space-x-2 z-[70]">
-                            <button onClick={() => setZoomLevel(z => Math.min(z + 0.5, 5))} className="p-2 bg-white/10 hover:bg-white/20 text-white rounded-full transition-colors">
-                                <ZoomIn size={24} />
-                            </button>
-                            <button onClick={() => setZoomLevel(z => Math.max(z - 0.5, 0.1))} className="p-2 bg-white/10 hover:bg-white/20 text-white rounded-full transition-colors">
-                                <ZoomOut size={24} />
-                            </button>
-                            <button onClick={() => { setZoomLevel(1); setPanPosition({x:0, y:0}); }} className="p-2 bg-white/10 hover:bg-white/20 text-white rounded-full transition-colors">
-                                <RotateCcw size={24} />
-                            </button>
-                            <button onClick={() => setViewerImage(null)} className="p-2 bg-white/10 hover:bg-white/20 text-white rounded-full transition-colors">
-                                <X size={24} />
-                            </button>
-                        </div>
-
-                        {/* Image Container */}
-                        <div 
-                            className="cursor-move"
-                            onMouseDown={handleMouseDown}
-                            onMouseMove={handleMouseMove}
-                            onMouseUp={handleMouseUp}
-                            onMouseLeave={handleMouseUp}
-                            style={{
-                                transform: `translate(${panPosition.x}px, ${panPosition.y}px) scale(${zoomLevel})`,
-                                transition: isDragging ? 'none' : 'transform 0.1s ease-out'
-                            }}
-                        >
-                            <img 
-                                src={viewerImage} 
-                                className="max-w-[90vw] max-h-[90vh] object-contain select-none pointer-events-none"
-                                draggable={false}
-                                alt="Full view"
-                                style={{ imageRendering: 'auto' }}
-                            />
-                        </div>
-                    </div>
-                )}
             </div>
+
+            {/* Image Viewer Modal */}
+            {viewerImage && (
+                <div 
+                    className={`absolute top-0 bottom-0 left-0 z-[60] flex items-center justify-center overflow-hidden bg-black/90 ${quotePanel.isOpen ? 'w-1/2' : 'w-full'}`}
+                    onWheel={handleWheel}
+                >
+                    {/* Controls */}
+                    <div className="absolute top-4 right-4 flex space-x-2 z-[70]">
+                        <button onClick={() => setZoomLevel(z => Math.min(z + 0.5, 5))} className="p-2 bg-white/10 hover:bg-white/20 text-white rounded-full transition-colors">
+                            <ZoomIn size={24} />
+                        </button>
+                        <button onClick={() => setZoomLevel(z => Math.max(z - 0.5, 0.1))} className="p-2 bg-white/10 hover:bg-white/20 text-white rounded-full transition-colors">
+                            <ZoomOut size={24} />
+                        </button>
+                        <button onClick={() => setRotation(r => r + 90)} className="p-2 bg-white/10 hover:bg-white/20 text-white rounded-full transition-colors">
+                            <RotateCcw size={24} />
+                        </button>
+                        <button onClick={() => setViewerImage(null)} className="p-2 bg-white/10 hover:bg-white/20 text-white rounded-full transition-colors">
+                            <X size={24} />
+                        </button>
+                    </div>
+
+                    {/* Image Container */}
+                    <div 
+                        className="cursor-move"
+                        onMouseDown={handleMouseDown}
+                        onMouseMove={handleMouseMove}
+                        onMouseUp={handleMouseUp}
+                        onMouseLeave={handleMouseUp}
+                        style={{
+                            transform: `translate(${panPosition.x}px, ${panPosition.y}px) scale(${zoomLevel}) rotate(${rotation}deg)`,
+                            transition: isDragging ? 'none' : 'transform 0.1s ease-out'
+                        }}
+                    >
+                        <img 
+                            src={viewerImage} 
+                            className="max-w-[90vw] max-h-[90vh] object-contain select-none pointer-events-none"
+                            draggable={false}
+                            alt="Full view"
+                            style={{ imageRendering: 'auto' }}
+                        />
+                    </div>
+                </div>
+            )}
+
+            {/* Right Quote Panel - Fixed width 400px */}
+            {quotePanel.isOpen && (
+                <div className="w-[400px] shrink-0 bg-white flex flex-col border-l border-gray-200 overflow-y-auto animate-in slide-in-from-right-10 duration-300">
+                    <EmployeeNewQuote 
+                        embedded={true} 
+                        initialState={quotePanel.data}
+                        onClose={() => setQuotePanel({ isOpen: false, data: null })}
+                        initialGroupName={groups.find(g => g.id === (quotePanel.data?.groupId || selectedGroupId))?.name}
+                        onSendMessage={handleSendQuoteResponse}
+                    />
+                </div>
+            )}
         </div>
     );
 }
