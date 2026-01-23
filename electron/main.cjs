@@ -32,6 +32,20 @@ if (require('electron-squirrel-startup')) {
   app.quit();
 }
 
+// --- NETWORK RESILIENCE & VPN COMPATIBILITY ---
+// Disable QUIC and HTTP/3 to avoid UDP blocking by corporate VPNs (Fortinet/Cisco)
+app.commandLine.appendSwitch('disable-quic');
+app.commandLine.appendSwitch('disable-http3');
+app.commandLine.appendSwitch('disable-features', 'quic');
+
+// Ensure system proxy settings are respected but not enforced if broken
+// app.commandLine.appendSwitch('no-proxy-server'); // Uncomment only if proxy is causing issues
+
+// TLS/SSL Security Configuration
+// We stick to the system trust store. If Fortinet performs SSL inspection,
+// the corporate root CA must be in the Windows Trusted Root Store.
+// ----------------------------------------------
+
 let mainWindow;
 
 function createWindow() {
@@ -83,6 +97,22 @@ function createWindow() {
   // Check for updates once window is ready
   mainWindow.once('ready-to-show', () => {
       autoUpdater.checkForUpdatesAndNotify();
+  });
+
+  // Handle certificate errors (Optional: Log only, do not blindly bypass)
+  app.on('certificate-error', (event, webContents, url, error, certificate, callback) => {
+    // Fortinet SSL Inspection often causes 'net::ERR_CERT_AUTHORITY_INVALID'
+    // if the root CA is not installed.
+    // We log it for debugging purposes.
+    console.error(`Certificate Error at ${url}: ${error}`);
+    
+    if (error === 'net::ERR_CERT_AUTHORITY_INVALID') {
+        console.log('Potential VPN SSL Inspection detected.');
+    }
+    
+    // Strict security: Do NOT call event.preventDefault() and callback(true)
+    // unless you want to bypass security (Not recommended for enterprise).
+    // Let Electron/Chromium handle trust via OS store.
   });
 }
 
