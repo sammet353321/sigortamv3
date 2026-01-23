@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Tray, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
@@ -56,6 +56,38 @@ app.commandLine.appendSwitch('ignore-urlfetcher-cert-requests');
 // ----------------------------------------------
 
 let mainWindow;
+let tray;
+let isQuitting = false;
+
+function createTray() {
+  const iconPath = path.join(__dirname, '../public/favicon.ico');
+  tray = new Tray(iconPath);
+  
+  const contextMenu = Menu.buildFromTemplate([
+    { 
+      label: 'Göster', 
+      click: () => mainWindow.show() 
+    },
+    { 
+      label: 'Çıkış', 
+      click: () => {
+        isQuitting = true;
+        app.quit();
+      } 
+    }
+  ]);
+
+  tray.setToolTip('Sigortam Kayıt');
+  tray.setContextMenu(contextMenu);
+
+  tray.on('click', () => {
+    if (mainWindow.isVisible()) {
+      mainWindow.hide();
+    } else {
+      mainWindow.show();
+    }
+  });
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -92,6 +124,15 @@ function createWindow() {
   if (isDev) {
     // mainWindow.webContents.openDevTools();
   }
+
+  // Handle Close Event (Minimize to Tray instead of Quit)
+  mainWindow.on('close', (event) => {
+    if (!isQuitting) {
+      event.preventDefault();
+      mainWindow.hide();
+      return false;
+    }
+  });
 
   // --- ERROR HANDLING FOR WHITE SCREEN ---
   mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
@@ -163,6 +204,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  createTray();
   createWindow();
 
   // IPC Handlers
