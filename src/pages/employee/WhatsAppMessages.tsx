@@ -3,7 +3,7 @@ import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
 import { Search, Send, Paperclip, FileText, User, Users, ChevronDown, X, ZoomIn, ZoomOut, RotateCcw, Filter, Car, Ban } from 'lucide-react';
 import { format } from 'date-fns';
-import { useNavigate, useSearchParams } from 'react-router-dom'; // Import useSearchParams
+import { useNavigate, useSearchParams, useLocation } from 'react-router-dom'; // Import useSearchParams
 import EmployeeNewQuote from './NewQuote';
 
 interface ChatGroup {
