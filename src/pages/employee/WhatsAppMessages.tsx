@@ -39,6 +39,7 @@ interface EmployeeGroup {
 export default function WhatsAppMessages() {
     const { user } = useAuth();
     const navigate = useNavigate();
+    const location = useLocation();
     const [searchParams] = useSearchParams(); // Hook
     
     const [groups, setGroups] = useState<ChatGroup[]>([]);

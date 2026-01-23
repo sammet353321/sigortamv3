@@ -146,6 +146,7 @@ export default function PolicyCut() {
                 net_prim: data.net_prim || '',
                 komisyon: data.komisyon || '',
                 acente: data.acente || '',
+                police_no: data.police_no || '',
                 
                 kart_bilgisi: '', 
                 ek_notlar: data.ek_bilgiler || ''
