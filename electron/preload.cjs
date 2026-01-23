@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   checkUpdate: () => ipcRenderer.invoke('check-update'),
   installUpdate: () => ipcRenderer.invoke('install-update'),
   onUpdateAvailable: (callback) => ipcRenderer.on('update-available', callback),
+  onUpdateNotAvailable: (callback) => ipcRenderer.on('update-not-available', callback),
   onUpdateDownloaded: (callback) => ipcRenderer.on('update-downloaded', callback),
   onUpdateError: (callback) => ipcRenderer.on('update-error', (_event, value) => callback(value))
 });
@@ -129,6 +130,14 @@ function setupUpdateListeners(btn) {
             `;
             document.head.appendChild(style);
         }
+        alert('Yeni bir güncelleme bulundu. İndiriliyor...');
+    });
+
+    ipcRenderer.on('update-not-available', () => {
+        alert('Şu an en güncel sürümü kullanıyorsunuz.');
+        // Reset button state
+        btn.style.color = '#9ca3af';
+        btn.title = "Güncellemeler Kontrol Ediliyor...";
     });
 
     ipcRenderer.on('update-downloaded', () => {
@@ -162,6 +171,9 @@ function setupUpdateListeners(btn) {
 
     ipcRenderer.on('update-error', (_event, err) => {
         console.error('Update error:', err);
-        // Optional: Show error state
+        alert('Güncelleme hatası: ' + err);
+        // Reset button state
+        btn.style.color = '#dc2626'; // Red
+        btn.title = "Güncelleme Hatası";
     });
 }

@@ -126,6 +126,10 @@ function createWindow() {
     mainWindow.webContents.send('update-available');
   });
 
+  autoUpdater.on('update-not-available', () => {
+    mainWindow.webContents.send('update-not-available');
+  });
+
   autoUpdater.on('update-downloaded', () => {
     mainWindow.webContents.send('update-downloaded');
   });
