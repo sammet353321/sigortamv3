@@ -17,7 +17,8 @@
     "electron:build": "npm run build && electron-builder"
   },
   "dependencies": {
-    "electron-squirrel-startup": "^1.0.1"
+    "electron-squirrel-startup": "^1.0.1",
+    "electron-updater": "^6.7.3"
   },
   "devDependencies": {
     "@eslint/js": "^9.25.0",
@@ -76,6 +77,11 @@
     ],
     "win": {
       "target": "nsis"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "sammet353321",
+      "repo": "sigortamv3"
     }
   }
 }

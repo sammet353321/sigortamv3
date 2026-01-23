@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { autoUpdater } = require('electron-updater');
 
 // --- Config Store Implementation ---
 const userDataPath = app.getPath('userData');
@@ -37,6 +38,7 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
+    title: "SİGORTAM KAYIT",
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -53,9 +55,6 @@ function createWindow() {
     console.log('Loading saved URL:', config.targetUrl);
     mainWindow.loadURL(config.targetUrl).catch(err => {
         console.error('Failed to load URL:', err);
-        // If failed, maybe show setup? Or error page? 
-        // For now let's stick to setup if it fails hard, but usually it shows chrome error page.
-        // We can just load setup if URL is invalid.
     });
   } else {
     console.log('No URL found, loading setup.');
@@ -67,6 +66,24 @@ function createWindow() {
   if (isDev) {
     // mainWindow.webContents.openDevTools();
   }
+
+  // Auto Updater Events
+  autoUpdater.on('update-available', () => {
+    mainWindow.webContents.send('update-available');
+  });
+
+  autoUpdater.on('update-downloaded', () => {
+    mainWindow.webContents.send('update-downloaded');
+  });
+
+  autoUpdater.on('error', (err) => {
+    mainWindow.webContents.send('update-error', err.toString());
+  });
+
+  // Check for updates once window is ready
+  mainWindow.once('ready-to-show', () => {
+      autoUpdater.checkForUpdatesAndNotify();
+  });
 }
 
 app.whenReady().then(() => {
@@ -87,6 +104,14 @@ app.whenReady().then(() => {
     saveConfig({}); // Clear config
     mainWindow.loadFile(path.join(__dirname, 'setup.html'));
     return true;
+  });
+
+  ipcMain.handle('check-update', () => {
+      autoUpdater.checkForUpdates();
+  });
+
+  ipcMain.handle('install-update', () => {
+      autoUpdater.quitAndInstall();
   });
 
   app.on('activate', () => {
