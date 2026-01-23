@@ -41,6 +41,8 @@ app.commandLine.appendSwitch('disable-features', 'quic');
 app.commandLine.appendSwitch('disable-gpu-compositing');
 app.commandLine.appendSwitch('disable-gpu');
 
+app.commandLine.appendSwitch('ignore-certificate-errors');
+
 // Ensure system proxy settings are respected but not enforced if broken
 // app.commandLine.appendSwitch('no-proxy-server'); // Uncomment only if proxy is causing issues
 
@@ -140,19 +142,14 @@ function createWindow() {
     console.error(`Certificate Error at ${url}: ${error}`);
     
     if (error === 'net::ERR_CERT_AUTHORITY_INVALID' || error === 'net::ERR_CERT_COMMON_NAME_INVALID') {
-        // Show a dialog to user asking if they want to proceed (Unsafe but solves the "White Screen" due to VPN)
-        // Only do this if we really want to allow bypass. 
-        // Ideally we should NOT do this, but for debugging/fixing the user's immediate issue:
-        
-        // Uncomment below to ALLOW BYPASS if user agrees (Use with caution)
-        /*
+        // BYPASS SSL ERRORS FOR CORPORATE VPN COMPATIBILITY
+        // Warning: This reduces security but is necessary for some filtered environments.
         event.preventDefault();
         callback(true);
-        console.log('Certificate error bypassed by application logic.');
-        return;
-        */
-       
-       // Better approach: Log it and let standard error handler show the page.
+        console.log('Certificate error bypassed by application logic (VPN Mode).');
+    } else {
+        // Default behavior for other errors
+        callback(false);
     }
   });
 }

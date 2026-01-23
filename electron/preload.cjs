@@ -33,7 +33,7 @@ function injectFloatingControls() {
     container.style.boxShadow = '0 2px 10px rgba(0,0,0,0.1)';
     container.style.backdropFilter = 'blur(5px)';
 
-    // Update Button (Hidden by default, shows when update available)
+    // Update Button (Visible but greyed out if no update, or hidden)
     const updateBtn = document.createElement('button');
     updateBtn.innerHTML = `
         <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -42,10 +42,14 @@ function injectFloatingControls() {
             <line x1="12" y1="15" x2="12" y2="3"/>
         </svg>
     `;
-    styleButton(updateBtn, '#10b981'); // Green
-    updateBtn.title = "Güncelleme Kontrol Ediliyor...";
-    updateBtn.style.display = 'none'; // Hidden initially
+    styleButton(updateBtn, '#9ca3af'); // Grey initially
+    updateBtn.title = "Güncellemeler Kontrol Ediliyor...";
+    // updateBtn.style.display = 'none'; // Don't hide, show it as inactive/checking
     updateBtn.id = 'update-btn';
+    updateBtn.onclick = () => {
+        ipcRenderer.invoke('check-update');
+        alert('Güncellemeler kontrol ediliyor...');
+    };
     
     // Refresh Button
     const refreshBtn = document.createElement('button');
