@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
@@ -37,6 +37,9 @@ if (require('electron-squirrel-startup')) {
 app.commandLine.appendSwitch('disable-quic');
 app.commandLine.appendSwitch('disable-http3');
 app.commandLine.appendSwitch('disable-features', 'quic');
+// Try to fix white screen issues with renderer crashing or gpu issues in VM/VPN
+app.commandLine.appendSwitch('disable-gpu-compositing');
+app.commandLine.appendSwitch('disable-gpu');
 
 // Ensure system proxy settings are respected but not enforced if broken
 // app.commandLine.appendSwitch('no-proxy-server'); // Uncomment only if proxy is causing issues
@@ -57,6 +60,9 @@ function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.cjs'),
+      // Enable some resilience
+      webSecurity: true, 
+      allowRunningInsecureContent: false
     },
     autoHideMenuBar: true,
     frame: true,
@@ -81,6 +87,34 @@ function createWindow() {
     // mainWindow.webContents.openDevTools();
   }
 
+  // --- ERROR HANDLING FOR WHITE SCREEN ---
+  mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
+      console.error('Page failed to load:', errorCode, errorDescription, validatedURL);
+      
+      // Load a local error page instead of white screen
+      const errorHtml = `
+        <html>
+        <body style="font-family: sans-serif; padding: 2rem; text-align: center; background: #f0f2f5;">
+            <h2 style="color: #dc2626;">Bağlantı Hatası</h2>
+            <p>Sayfa yüklenirken bir sorun oluştu.</p>
+            <div style="background: white; padding: 1rem; border-radius: 8px; margin: 1rem auto; max-width: 500px; text-align: left;">
+                <p><strong>URL:</strong> ${validatedURL}</p>
+                <p><strong>Hata Kodu:</strong> ${errorCode}</p>
+                <p><strong>Açıklama:</strong> ${errorDescription}</p>
+            </div>
+            <p style="color: #6b7280; font-size: 0.9rem;">
+                Lütfen internet bağlantınızı ve VPN durumunuzu kontrol edin. 
+                <br>Eğer kurumsal VPN kullanıyorsanız, güvenlik duvarı bu adresi engelliyor olabilir.
+            </p>
+            <button onclick="window.location.reload()" style="background: #2563eb; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; margin-top: 10px;">Tekrar Dene</button>
+            <br><br>
+            <button onclick="window.electronAPI.clearUrl()" style="background: #4b5563; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer;">Ayarları Sıfırla (Kuruluma Dön)</button>
+        </body>
+        </html>
+      `;
+      mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(errorHtml)}`);
+  });
+
   // Auto Updater Events
   autoUpdater.on('update-available', () => {
     mainWindow.webContents.send('update-available');
@@ -103,16 +137,23 @@ function createWindow() {
   app.on('certificate-error', (event, webContents, url, error, certificate, callback) => {
     // Fortinet SSL Inspection often causes 'net::ERR_CERT_AUTHORITY_INVALID'
     // if the root CA is not installed.
-    // We log it for debugging purposes.
     console.error(`Certificate Error at ${url}: ${error}`);
     
-    if (error === 'net::ERR_CERT_AUTHORITY_INVALID') {
-        console.log('Potential VPN SSL Inspection detected.');
+    if (error === 'net::ERR_CERT_AUTHORITY_INVALID' || error === 'net::ERR_CERT_COMMON_NAME_INVALID') {
+        // Show a dialog to user asking if they want to proceed (Unsafe but solves the "White Screen" due to VPN)
+        // Only do this if we really want to allow bypass. 
+        // Ideally we should NOT do this, but for debugging/fixing the user's immediate issue:
+        
+        // Uncomment below to ALLOW BYPASS if user agrees (Use with caution)
+        /*
+        event.preventDefault();
+        callback(true);
+        console.log('Certificate error bypassed by application logic.');
+        return;
+        */
+       
+       // Better approach: Log it and let standard error handler show the page.
     }
-    
-    // Strict security: Do NOT call event.preventDefault() and callback(true)
-    // unless you want to bypass security (Not recommended for enterprise).
-    // Let Electron/Chromium handle trust via OS store.
   });
 }
 
