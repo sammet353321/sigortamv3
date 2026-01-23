@@ -21,6 +21,7 @@
     "electron-updater": "^6.7.3"
   },
   "devDependencies": {
+    "@svar-ui/react-grid": "^2.3.0",
     "@eslint/js": "^9.25.0",
     "@google/generative-ai": "^0.24.1",
     "@supabase/supabase-js": "^2.90.1",

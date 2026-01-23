@@ -17,6 +17,7 @@ export interface Teklif {
   dogum_tarihi?: string;
   sirket?: string;
   tarih: string; // created_at
+  tanzim_tarihi?: string;
   sasi?: string;
   plaka: string;
   tc_vkn?: string;
@@ -87,4 +88,15 @@ export interface Police {
   sasi_no?: string; // Mapped to sasi
 
   ilgili_kisi?: { name: string };
+}
+
+export interface Policy {
+  id: string;
+  policy_no: string;
+  customer_name: string;
+  branch: string;
+  start_date: string;
+  end_date: string;
+  premium_amount: number;
+  created_at: string;
 }

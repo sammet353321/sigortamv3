@@ -14,20 +14,25 @@ export default function Login() {
   // Clear session on mount to fix stuck states
   useEffect(() => {
     const clearSession = async () => {
-        // Only clear if we are definitely on login page and want a fresh start
-        // But be careful not to clear if we just redirected here
-        // Actually, let's just clear any potential bad state
-        localStorage.removeItem('sb-aqubbkxsfwmhfbolkfah-auth-token'); // Clear Supabase token manually
+        // Optional: clear session if we landed here to force fresh login
+        // localStorage.removeItem('sb-aqubbkxsfwmhfbolkfah-auth-token'); 
     };
-    // clearSession(); 
   }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    // Prevent double submission
+    if (loading) return;
+
     setLoading(true);
     setError(null);
 
     try {
+      if (!email || !password) {
+          throw new Error('Lütfen e-posta ve şifrenizi giriniz.');
+      }
+
       const { data, error } = await supabase.auth.signInWithPassword({
         email,
         password,
@@ -37,17 +42,24 @@ export default function Login() {
 
       if (data.session) {
         // Fetch user role to redirect
-        const { data: userData } = await supabase
+        const { data: userData, error: roleError } = await supabase
           .from('users')
           .select('role')
           .eq('id', data.session.user.id)
           .single();
+        
+        if (roleError) {
+            console.error('Role fetch error:', roleError);
+            // Default to unauthorized or show error
+            throw new Error('Kullanıcı rolü bulunamadı.');
+        }
 
         if (userData) {
           const role = userData.role;
           if (role === 'admin') navigate('/admin/dashboard');
           else if (role === 'employee') navigate('/employee/dashboard');
           else if (role === 'sub_agent') navigate('/sub-agent/dashboard');
+          else navigate('/unauthorized');
         }
       }
     } catch (err: any) {
@@ -59,17 +71,13 @@ export default function Login() {
       } else if (err.message.includes('Email not confirmed')) {
         errorMessage = 'E-posta adresi doğrulanmamış. Lütfen yöneticinizle iletişime geçin.';
       } else if (err.message.includes('Email logins are disabled')) {
-        errorMessage = (
-          <span>
-            E-posta ile giriş sistemi Supabase panelinde kapalı. <br/>
-            Lütfen <b>Authentication {'>'} Providers {'>'} Email</b> menüsünden <b>Enable Email provider</b> seçeneğini açınız.
-          </span>
-        ) as any;
+        errorMessage = 'E-posta ile giriş sistemi kapalı.';
       } else {
-        errorMessage = `Hata: ${err.message}`;
+        errorMessage = err.message;
       }
       
       setError(errorMessage);
+      toast.error(errorMessage);
     } finally {
       setLoading(false);
     }
@@ -120,9 +128,14 @@ export default function Login() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-lg transition-colors disabled:opacity-50"
+            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-lg transition-colors disabled:opacity-50 flex items-center justify-center"
           >
-            {loading ? 'Giriş Yapılıyor...' : 'Giriş Yap'}
+            {loading ? (
+                <>
+                    <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin mr-2"></span>
+                    Giriş Yapılıyor...
+                </>
+            ) : 'Giriş Yap'}
           </button>
         </form>
 

@@ -15,6 +15,7 @@ export default function EmployeePoliciesPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState<string>('all');
   const [uniqueTypes, setUniqueTypes] = useState<string[]>([]);
+  const [selectedMonth, setSelectedMonth] = useState<number>(new Date().getMonth()); // 0-11, 12 => Tümü
   
   // Action Modals State
   const [selectedPolicy, setSelectedPolicy] = useState<any>(null);
@@ -36,21 +37,30 @@ export default function EmployeePoliciesPage() {
 
   useEffect(() => {
     fetchPolicies();
-  }, [user]);
+  }, [user, selectedMonth]);
 
   const fetchPolicies = async () => {
     if (!user) return;
     
     try {
       setLoading(true);
-      const { data, error } = await supabase
+      let query = supabase
         .from('policeler')
         .select('*, ilgili_kisi:users!ilgili_kisi_id(name, phone), kesen:users!kesen_id(name)')
         .eq('kesen_id', user.id)
         .order('tarih', { ascending: false });
+      if (selectedMonth >= 0 && selectedMonth <= 11) {
+        const now = new Date();
+        const start = new Date(now.getFullYear(), selectedMonth, 1);
+        const end = new Date(now.getFullYear(), selectedMonth + 1, 1);
+        query = query.gte('tarih', start.toISOString()).lt('tarih', end.toISOString());
+      }
+      const { data, error } = await query;
 
       if (error) throw error;
       setPolicies(data || []);
+      const types = Array.from(new Set((data || []).map(p => p.tur).filter(Boolean)));
+      setUniqueTypes(types);
     } catch (error) {
       console.error('Error fetching policies:', error);
     } finally {
@@ -225,12 +235,14 @@ export default function EmployeePoliciesPage() {
 
   const filteredPolicies = policies.filter(policy => {
     const searchLower = searchTerm.toLowerCase();
-    return (
+    const matchesSearch = (
       (policy.plaka?.toLowerCase().includes(searchLower) || '') ||
       (policy.tc_vkn?.includes(searchLower) || '') ||
       (policy.ilgili_kisi?.name?.toLowerCase().includes(searchLower) || '') ||
       (policy.police_no?.toLowerCase().includes(searchLower) || '')
     );
+    const matchesType = filterType === 'all' || policy.tur === filterType;
+    return matchesSearch && matchesType;
   });
 
   const downloadExcel = () => {
@@ -397,6 +409,20 @@ export default function EmployeePoliciesPage() {
               {uniqueTypes.map(type => (
                 <option key={type} value={type}>{type}</option>
               ))}
+            </select>
+          </div>
+
+          <div className="relative">
+            <Filter className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={18} />
+            <select 
+              className="pl-10 pr-8 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none appearance-none bg-white w-full sm:w-48"
+              value={selectedMonth}
+              onChange={(e) => setSelectedMonth(Number(e.target.value))}
+            >
+              {['Ocak','Şubat','Mart','Nisan','Mayıs','Haziran','Temmuz','Ağustos','Eylül','Ekim','Kasım','Aralık'].map((m, idx) => (
+                <option key={m} value={idx}>{m}</option>
+              ))}
+              <option value={12}>Tümü</option>
             </select>
           </div>
 

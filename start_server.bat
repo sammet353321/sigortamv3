@@ -1,5 +1,20 @@
 @echo off
-echo Starting Frontend Server...
-echo Access via http://localhost:5173 or your local IP (e.g., http://192.168.1.x:5173)
-npm run dev
-pause
+title Sigorta Paneli
+color 0A
+cls
+
+echo ===================================================
+echo   SIGORTA ACENTESI YONETIM PANELI
+echo ===================================================
+echo.
+
+if not exist node_modules (
+    echo [BILGI] Kurulum yapiliyor...
+    call npm install
+)
+
+echo [BILGI] Sunucu baslatiliyor...
+echo.
+
+:: cmd /k komutu pencerenin kapanmasini kesinlikle engeller
+cmd /k "npm run dev"
