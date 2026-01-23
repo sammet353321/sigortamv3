@@ -115,7 +115,7 @@ export default function UsersPage() {
                   throw err; // Original error
               }
 
-              const existingUser = listData.users.find(u => u.email === newUser.email);
+              const existingUser = (listData.users as any[]).find(u => u.email === newUser.email);
               
               if (existingUser) {
                   authUser = existingUser;

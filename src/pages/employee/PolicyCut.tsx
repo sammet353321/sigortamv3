@@ -374,7 +374,7 @@ export default function PolicyCut() {
                     // It exists in schema (id: 20404.17, name: 'kart_bilgisi', type: 'text')
                     
                     kart_bilgisi: formData.kart_bilgisi,
-                    ek_bilgiler: formData.ek_notlar
+                    //ek_bilgiler: formData.ek_notlar
                 });
 
           if (policyError) throw policyError;
