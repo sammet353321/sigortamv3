@@ -108,17 +108,16 @@ begin
     into v_product_distribution
     from product_stats;
 
-    -- Employee Performance (Fix Premium Mismatch by including NULLs)
+    -- Employee Performance (Updated to use KESEN column directly from Policeler table)
     with emp_stats as (
         select 
-            coalesce(u.name, 'Sistem / Atanmamış') as name,
-            count(p.id) as policy_count,
-            coalesce(sum(p.net_prim), 0) as total_premium, 
-            coalesce(sum(p.komisyon), 0) as total_commission
-        from public.policeler p
-        left join public.users u on p.employee_id = u.id
-        where p.tanzim_tarihi >= v_year_start and p.tanzim_tarihi < v_year_end
-        group by u.name
+            coalesce(nullif(kesen, ''), 'Sistem / Belirsiz') as name,
+            count(id) as policy_count,
+            coalesce(sum(net_prim), 0) as total_premium, 
+            coalesce(sum(komisyon), 0) as total_commission
+        from public.policeler
+        where tanzim_tarihi >= v_year_start and tanzim_tarihi < v_year_end
+        group by 1
         order by total_premium desc
     )
     select jsonb_agg(jsonb_build_object(

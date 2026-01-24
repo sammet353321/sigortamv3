@@ -91,14 +91,18 @@ export default function PolicyImportModal({ isOpen, onClose, onSuccess }: Import
               // Handle 2 digit year
               if (year < 100) year += 2000;
 
-              const d = new Date(Date.UTC(year, month - 1, day));
+              // USE UTC NOON (12:00) to prevent timezone shift issues (e.g. 00:00 -> Previous Day 21:00)
+              const d = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
               if (!isNaN(d.getTime())) return d;
           }
 
           // 4. Fallback: Try ISO YYYY-MM-DD
           const isoMatch = strVal.match(/^(\d{4})-(\d{2})-(\d{2})$/);
           if (isoMatch) {
-               const d = new Date(strVal);
+               let year = parseInt(isoMatch[1]);
+               let month = parseInt(isoMatch[2]);
+               let day = parseInt(isoMatch[3]);
+               const d = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
                if(!isNaN(d.getTime())) return d;
           }
 
@@ -110,7 +114,7 @@ export default function PolicyImportModal({ isOpen, onClose, onSuccess }: Import
                   let m = parseInt(parts[1]);
                   let y = parseInt(parts[2]);
                   if (y < 100) y += 2000;
-                  const dateObj = new Date(Date.UTC(y, m - 1, d));
+                  const dateObj = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
                   if (!isNaN(dateObj.getTime())) return dateObj;
               }
           }
