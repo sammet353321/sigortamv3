@@ -68,8 +68,12 @@ export default function PolicyImportModal({ isOpen, onClose, onSuccess }: Import
           // 1. Handle Excel Serial Date (Number)
           if (typeof val === 'number') {
               // Excel base date: Dec 30, 1899
-              const d = new Date(Math.round((val - 25569) * 86400 * 1000));
-              d.setMinutes(d.getMinutes() + d.getTimezoneOffset());
+              // Convert to UTC milliseconds
+              // (val - 25569) gives days since 1970-01-01
+              // * 86400 * 1000 gives milliseconds
+              // We add 12 hours (43200000 ms) to set time to Noon (12:00) to avoid timezone shifting
+              const utcMs = Math.round((val - 25569) * 86400 * 1000) + 43200000;
+              const d = new Date(utcMs);
               if (!isNaN(d.getTime())) return d;
           }
 
@@ -91,7 +95,7 @@ export default function PolicyImportModal({ isOpen, onClose, onSuccess }: Import
               // Handle 2 digit year
               if (year < 100) year += 2000;
 
-              // USE UTC NOON (12:00) to prevent timezone shift issues (e.g. 00:00 -> Previous Day 21:00)
+              // USE UTC NOON (12:00) to prevent timezone shift issues
               const d = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
               if (!isNaN(d.getTime())) return d;
           }
@@ -123,6 +127,14 @@ export default function PolicyImportModal({ isOpen, onClose, onSuccess }: Import
       } catch {
           return undefined;
       }
+  };
+
+  // Helper to format Date object to YYYY-MM-DD string for DB
+  const toDBDate = (d: Date | undefined): string | null => {
+      if (!d) return null;
+      // Use toISOString() which returns UTC. Since we set time to 12:00 UTC, this will always be correct date.
+      // e.g. 2026-01-01T12:00:00.000Z -> 2026-01-01
+      return d.toISOString().split('T')[0];
   };
 
   const parseMoney = (val: any): number => {
@@ -235,16 +247,19 @@ export default function PolicyImportModal({ isOpen, onClose, onSuccess }: Import
             const total = dataRows.length;
             const parsedRows: ParsedRow[] = [];
             
-            // Helper to get value by possible keys
+            // Helper to get value by possible keys - STRICT MODE
             const getVal = (row: any[], keys: string[]) => {
                 for (const key of keys) {
                     // Try exact match first
                     let colIdx = headerMap[key];
-                    // Try partial match if exact fails
+                    
+                    // DISABLED FUZZY MATCHING to prevent wrong column mapping (e.g. 'Ek Bilgiler' matching 'bilgi')
+                    /*
                     if (colIdx === undefined) {
                          const foundKey = Object.keys(headerMap).find(k => k.includes(key));
                          if (foundKey) colIdx = headerMap[foundKey];
                     }
+                    */
                     
                     if (colIdx !== undefined && row[colIdx] !== undefined) {
                         return row[colIdx];
@@ -269,9 +284,12 @@ export default function PolicyImportModal({ isOpen, onClose, onSuccess }: Import
                      // Mapping with EXTENDED aliases
                      const police_no = String(getVal(row, ['policeno', 'police', 'policenumara']) || '').trim();
                      
-                     // Name Logic: Try all aliases, then try concatenated "Ad" + "Soyad" columns if separate
-                     // Enhanced Fallback Logic for Large Files where "Ad Soyad" might be missing or named weirdly
-                     let ad_soyad = String(getVal(row, ['adsoyad', 'musteriadi', 'unvan', 'sigortali', 'sigortaliadi', 'musteri', 'adi', 'soyadi', 'adisoyadi', 'sigortaliadsoyad', 'isim']) || '').trim();
+                     // Name Logic: Try all aliases
+                     // Added more specific aliases to cover common Excel headers without relying on fuzzy match
+                     let ad_soyad = String(getVal(row, [
+                         'adsoyad', 'musteriadi', 'unvan', 'sigortali', 'sigortaliadi', 'musteri', 
+                         'adi', 'soyadi', 'adisoyadi', 'sigortaliadsoyad', 'isim', 'musteriunvani', 'sigortaliunvani'
+                     ]) || '').trim();
                      
                      // Fallback 1: Separate Ad and Soyad columns
                      if (!ad_soyad || ad_soyad === '-' || ad_soyad === '0') {
@@ -281,28 +299,6 @@ export default function PolicyImportModal({ isOpen, onClose, onSuccess }: Import
                              ad_soyad = `${ad} ${soyad}`.trim();
                          }
                      }
-
-                     // Fallback 2: Look for ANY column that looks like a name if we have a valid Policy No (Last Resort)
-                     // DISABLED: This was causing issues by picking up 'Ek Bilgiler' instead of the real name.
-                     // The new enhanced header mapping above should handle most cases.
-                     /*
-                     if ((!ad_soyad || ad_soyad === '-' || ad_soyad === '0') && police_no.length > 3) {
-                         // Iterate through the row to find a string that looks like a name (not a date, not a number)
-                         // This is risky but helps when column mapping fails completely
-                         for (let c = 0; c < row.length; c++) {
-                             const val = String(row[c] || '').trim();
-                             if (val.length > 5 && !val.match(/[0-9]/) && val.includes(' ')) {
-                                 // Basic heuristic: contains space, no numbers, length > 5
-                                 // Check if it's not a known non-name column
-                                 const headerName = Object.keys(headerMap).find(key => headerMap[key] === c);
-                                 if (headerName && !['sirket', 'acente', 'adres', 'il', 'ilce', 'tur', 'durum'].some(k => headerName.includes(k))) {
-                                      ad_soyad = val;
-                                      break; 
-                                 }
-                             }
-                         }
-                     }
-                     */
 
                      const plaka = String(getVal(row, ['plaka', 'aracplaka']) || '').trim().toUpperCase();
 
@@ -316,26 +312,23 @@ export default function PolicyImportModal({ isOpen, onClose, onSuccess }: Import
                          durum = 'İPTAL';
                      }
 
-                     // --- DATE LOGIC v7.0 (USER CONFIRMED) ---
-                     // Normal Policy: Table shows 2026 (End), Stats should be 2025 (Start) -> Subtract 1 Year.
-                     // Cancelled Policy: Table shows 2025 (Cancel Date), Stats should be 2025 (Cancel Date) -> Use AS IS.
-                     
-                     // 1. Get the Raw Date from Excel (End Date or Cancel Date)
+                     // --- DATE LOGIC v8.0 ---
+                     // 1. Get the Raw Date from Excel
                      const dateRaw = getVal(row, ['tarih', 'bitis', 'bitistarihi', 'vadebitis', 'son', 'tanzimtarihi', 'baslangic', 'duzenlemetarihi', 'baslamatarihi', 'policetarihi', 'baslama']);
                      let endDate = parseDate(dateRaw) || new Date();
                      
                      let tanzimDate = new Date(endDate);
                      
                      if (durum === 'İPTAL') {
-                         // Cancelled: Use Date AS IS (e.g. 2025 -> 2025)
+                         // Cancelled: Use Date AS IS
                      } else {
-                         // Normal: Subtract 1 Year (e.g. 2026 -> 2025)
+                         // Normal: Subtract 1 Year
                          tanzimDate.setFullYear(tanzimDate.getFullYear() - 1);
                      }
                      
-                     // 3. Map to DB Fields
-                     const dbTarih = endDate;     // Always show the Excel Date in Table
-                     const dbTanzimTarihi = tanzimDate; // Calculated date for stats
+                     // 3. Map to DB Fields using toDBDate helper (YYYY-MM-DD)
+                     const dbTarihStr = toDBDate(endDate) || new Date().toISOString().split('T')[0];
+                     const dbTanzimTarihiStr = toDBDate(tanzimDate);
 
                      const dogumDate = parseDate(getVal(row, ['dogumtarihi', 'dogum']));
 
@@ -344,10 +337,10 @@ export default function PolicyImportModal({ isOpen, onClose, onSuccess }: Import
                          police_no: police_no,
                          ad_soyad: ad_soyad || '-',
                          plaka: plaka || '-',
-                         dogum_tarihi: dogumDate?.toISOString(),
+                         dogum_tarihi: toDBDate(dogumDate) || undefined,
                          sirket: String(getVal(row, ['sirket', 'sigortasirketi', 'firma']) || '-'),
-                         tarih: dbTarih.toISOString(),
-                         tanzim_tarihi: dbTanzimTarihi.toISOString(), 
+                         tarih: dbTarihStr,
+                         tanzim_tarihi: dbTanzimTarihiStr, 
                          sasi: String(getVal(row, ['sasi', 'sasino', 'sase']) || '-'),
 
                          tc_vkn: String(getVal(row, ['tc', 'vkn', 'tcvkn', 'kimlikno', 'verginumarasi']) || '-'),
