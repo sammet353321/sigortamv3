@@ -39,6 +39,32 @@ interface ParsedRow {
 
 const CHUNK_SIZE = 100; // Reduced from 500 for safer/more stable processing
 
+// STRICT HEADER MAPPING (User Defined)
+// Keys: Excel Header Name (Normalized) -> Value: DB Field Key
+const STRICT_MAPPING: Record<string, keyof ParsedRow> = {
+    'adsoyad': 'ad_soyad',
+    'dogumtarihi': 'dogum_tarihi',
+    'sirket': 'sirket',
+    'tarih': 'tarih',
+    'sasi': 'sasi',
+    'plaka': 'plaka',
+    'tcvkn': 'tc_vkn',
+    'belgeno': 'belge_no',
+    'araccinsi': 'arac_cinsi',
+    'brutprim': 'brut_prim',
+    'tur': 'tur',
+    'kesen': 'kesen',
+    'ilgilikisi': 'ilgili_kisi',
+    'policeno': 'police_no',
+    'acente': 'acente',
+    'kart': 'kart',
+    'ekbilgileriletisim': 'ek_bilgiler_iletisim',
+    'netprim': 'net_prim',
+    'komisyon': 'komisyon'
+};
+
+const REQUIRED_HEADERS = Object.keys(STRICT_MAPPING);
+
 export default function PolicyImportModal({ isOpen, onClose, onSuccess }: ImportModalProps) {
   const { user } = useAuth();
   const [step, setStep] = useState<'upload' | 'analyzing' | 'importing'>('upload');
@@ -207,29 +233,29 @@ export default function PolicyImportModal({ isOpen, onClose, onSuccess }: Import
                 return;
             }
 
-            // 2. Find Header Row
+            // 2. Find Header Row (STRICT MODE)
             let headerRowIndex = -1;
-            let headerMap: Record<string, number> = {}; // normalized_name -> column_index
+            let dbColMap: Record<string, number> = {}; // DB_FIELD -> COLUMN_INDEX
 
-            // EXPANDED ALIAS LIST for broader matching
-            const targetHeaders = [
-                'policeno', 'adsoyad', 'musteri', 'sigortali', 'unvan', 'plaka', 'tc', 'vkn', 'tcvkn', 'brutprim', 'tarih', 'sirket', 'acente', 'belgeno'
-            ];
-
-            // Increased scan depth to 100 for larger files with metadata headers
+            // Scan first 100 rows
             for (let i = 0; i < Math.min(rawData.length, 100); i++) {
                 const row = rawData[i];
                 if (!Array.isArray(row)) continue;
 
                 const normalizedRow = row.map(cell => normalizeHeader(String(cell || '')));
-                const matchCount = normalizedRow.filter(h => targetHeaders.some(th => h.includes(th))).length;
+                
+                // Check if ALL required headers exist in this row
+                // We check if every key in STRICT_MAPPING is present in the row
+                const missingHeaders = REQUIRED_HEADERS.filter(req => !normalizedRow.includes(req));
 
-                // Lower threshold to 2 if needed, but 3 is safer. 
-                if (matchCount >= 2) { 
+                if (missingHeaders.length === 0) {
                     headerRowIndex = i;
-                    // Build map
+                    // Build map: DB Field -> Column Index
                     normalizedRow.forEach((h, colIdx) => {
-                        if (h) headerMap[h] = colIdx;
+                        const dbField = STRICT_MAPPING[h];
+                        if (dbField) {
+                            dbColMap[dbField] = colIdx;
+                        }
                     });
                     break;
                 }
@@ -237,100 +263,65 @@ export default function PolicyImportModal({ isOpen, onClose, onSuccess }: Import
 
             if (headerRowIndex === -1) {
                 setDebugInfo(`Başlık satırı bulunamadı. İlk 5 satır:\n${JSON.stringify(rawData.slice(0,5), null, 2)}`);
-                alert("Başlık satırı bulunamadı! Lütfen dosyanızı kontrol edin.");
+                alert("HATA: Excel formatı uyumsuz! 'Tam Eşleşme' kuralına göre şu başlıklar zorunludur:\n" + 
+                      "AD SOYAD, DOĞUM TARİHİ, ŞİRKET, TARİH, ŞASİ, PLAKA, TC VKN, BELGE NO, ARAÇ CİNSİ, BRÜT PRİM, TÜR, KESEN, İLGİLİ KİŞİ, POLİÇE NO, ACENTE, KART, EK BİLGİLER İLETİŞİM, NET PRİM, KOMİSYON");
                 setStep('upload');
                 return;
             }
 
-            // 3. Parse Data using the Header Map
+            // 3. Parse Data using the Strict Map
             const dataRows = rawData.slice(headerRowIndex + 1);
             const total = dataRows.length;
             const parsedRows: ParsedRow[] = [];
             
-            // Helper to get value by possible keys - STRICT MODE
-            const getVal = (row: any[], keys: string[]) => {
-                for (const key of keys) {
-                    // Try exact match first
-                    let colIdx = headerMap[key];
-                    
-                    // DISABLED FUZZY MATCHING to prevent wrong column mapping (e.g. 'Ek Bilgiler' matching 'bilgi')
-                    /*
-                    if (colIdx === undefined) {
-                         const foundKey = Object.keys(headerMap).find(k => k.includes(key));
-                         if (foundKey) colIdx = headerMap[foundKey];
-                    }
-                    */
-                    
-                    if (colIdx !== undefined && row[colIdx] !== undefined) {
-                        return row[colIdx];
-                    }
+            // Helper to get value directly by DB Field Name
+            const getCol = (row: any[], field: keyof ParsedRow | string) => {
+                const idx = dbColMap[field as string];
+                if (idx !== undefined && row[idx] !== undefined) {
+                    return row[idx];
                 }
                 return undefined;
             };
 
             let processed = 0;
             
-            // Process all rows in one go to keep it simple, or chunked for UI update
+            // Process all rows
             const processChunk = async () => {
                  const end = Math.min(processed + 2000, total);
                  for (let i = processed; i < end; i++) {
                      const row = dataRows[i];
                      if (!row || row.length === 0) continue;
 
-                     // Skip if it looks like a repeated header
+                     // Skip if repeated header
                      const firstCell = normalizeHeader(String(row[0] || ''));
                      if (firstCell.includes('policeno') || firstCell.includes('adsoyad')) continue;
 
-                     // Mapping with EXTENDED aliases
-                     const police_no = String(getVal(row, ['policeno', 'police', 'policenumara']) || '').trim();
-                     
-                     // Name Logic: Try all aliases
-                     // Added more specific aliases to cover common Excel headers without relying on fuzzy match
-                     let ad_soyad = String(getVal(row, [
-                         'adsoyad', 'musteriadi', 'unvan', 'sigortali', 'sigortaliadi', 'musteri', 
-                         'adi', 'soyadi', 'adisoyadi', 'sigortaliadsoyad', 'isim', 'musteriunvani', 'sigortaliunvani'
-                     ]) || '').trim();
-                     
-                     // Fallback 1: Separate Ad and Soyad columns
-                     if (!ad_soyad || ad_soyad === '-' || ad_soyad === '0') {
-                         const ad = String(getVal(row, ['ad', 'adi', 'isim']) || '').trim();
-                         const soyad = String(getVal(row, ['soyad', 'soyadi']) || '').trim();
-                         if (ad || soyad) {
-                             ad_soyad = `${ad} ${soyad}`.trim();
-                         }
-                     }
+                     // Strict Mapping
+                     const police_no = String(getCol(row, 'police_no') || '').trim();
+                     const ad_soyad = String(getCol(row, 'ad_soyad') || '').trim();
+                     const plaka = String(getCol(row, 'plaka') || '').trim().toUpperCase();
 
-                     const plaka = String(getVal(row, ['plaka', 'aracplaka']) || '').trim().toUpperCase();
-
-                     // Validation: Must have at least Policy No OR Plaka OR Ad Soyad to be considered a row
+                     // Validation
                      if (!police_no && !plaka && !ad_soyad) continue;
 
-                     const tur = String(getVal(row, ['tur', 'brans', 'urun', 'policecinsi']) || '').trim();
+                     const tur = String(getCol(row, 'tur') || '').trim();
                      let durum = 'POLİÇE';
-                     // Case insensitive check for "iptal" in TUR column
                      if (tur.toLocaleLowerCase('tr-TR').includes('iptal')) {
                          durum = 'İPTAL';
                      }
 
-                     // --- DATE LOGIC v8.0 ---
-                     // 1. Get the Raw Date from Excel
-                     const dateRaw = getVal(row, ['tarih', 'bitis', 'bitistarihi', 'vadebitis', 'son', 'tanzimtarihi', 'baslangic', 'duzenlemetarihi', 'baslamatarihi', 'policetarihi', 'baslama']);
+                     // Date Logic
+                     const dateRaw = getCol(row, 'tarih');
                      let endDate = parseDate(dateRaw) || new Date();
                      
                      let tanzimDate = new Date(endDate);
-                     
-                     if (durum === 'İPTAL') {
-                         // Cancelled: Use Date AS IS
-                     } else {
-                         // Normal: Subtract 1 Year
+                     if (durum !== 'İPTAL') {
                          tanzimDate.setFullYear(tanzimDate.getFullYear() - 1);
                      }
                      
-                     // 3. Map to DB Fields using toDBDate helper (YYYY-MM-DD)
                      const dbTarihStr = toDBDate(endDate) || new Date().toISOString().split('T')[0];
                      const dbTanzimTarihiStr = toDBDate(tanzimDate);
-
-                     const dogumDate = parseDate(getVal(row, ['dogumtarihi', 'dogum']));
+                     const dogumDate = parseDate(getCol(row, 'dogum_tarihi'));
 
                      parsedRows.push({
                          id: i,
@@ -338,10 +329,27 @@ export default function PolicyImportModal({ isOpen, onClose, onSuccess }: Import
                          ad_soyad: ad_soyad || '-',
                          plaka: plaka || '-',
                          dogum_tarihi: toDBDate(dogumDate) || undefined,
-                         sirket: String(getVal(row, ['sirket', 'sigortasirketi', 'firma']) || '-'),
+                         sirket: String(getCol(row, 'sirket') || '-'),
                          tarih: dbTarihStr,
                          tanzim_tarihi: dbTanzimTarihiStr, 
-                         sasi: String(getVal(row, ['sasi', 'sasino', 'sase']) || '-'),
+                         sasi: String(getCol(row, 'sasi') || '-'),
+                         tc_vkn: String(getCol(row, 'tc_vkn') || '-'),
+                         belge_no: String(getCol(row, 'belge_no') || '-'),
+                         arac_cinsi: String(getCol(row, 'arac_cinsi') || '-'),
+                         brut_prim: parseMoney(getCol(row, 'brut_prim')),
+                         net_prim: parseMoney(getCol(row, 'net_prim')),
+                         komisyon: parseMoney(getCol(row, 'komisyon')),
+                         tur: tur || '-',
+                         kesen: String(getCol(row, 'kesen') || '-'),
+                         ilgili_kisi: String(getCol(row, 'ilgili_kisi') || '-'),
+                         acente: String(getCol(row, 'acente') || '-'),
+                         kart: String(getCol(row, 'kart') || '-'),
+                         ek_bilgiler_iletisim: String(getCol(row, 'ek_bilgiler_iletisim') || '-'),
+                         durum: durum,
+                         isValid: !!police_no, 
+                         error: !police_no ? 'Poliçe No Eksik' : undefined
+                     });
+                 }
 
                          tc_vkn: String(getVal(row, ['tc', 'vkn', 'tcvkn', 'kimlikno', 'verginumarasi']) || '-'),
                          belge_no: String(getVal(row, ['belgeno', 'ruhsatserino', 'tescilbelgeno']) || '-'),
