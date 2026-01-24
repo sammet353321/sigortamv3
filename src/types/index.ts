@@ -92,11 +92,31 @@ export interface Police {
 
 export interface Policy {
   id: string;
-  policy_no: string;
-  customer_name: string;
-  branch: string;
-  start_date: string;
-  end_date: string;
-  premium_amount: number;
-  created_at: string;
+  ad_soyad?: string;
+  dogum_tarihi?: string;
+  sirket?: string;
+  tarih?: string;
+  sasi?: string;
+  plaka?: string;
+  tc_vkn?: string;
+  belge_no?: string;
+  arac_cinsi?: string;
+  brut_prim?: number;
+  tur?: string;
+  kesen?: string;
+  ilgili_kisi?: string;
+  police_no?: string;
+  acente?: string;
+  kart?: string;
+  ek_bilgiler_iletisim?: string;
+  net_prim?: number;
+  komisyon?: number;
+  
+  // Legacy fields mapping
+  customer_name?: string; // Mapped to ad_soyad
+  branch?: string;        // Mapped to tur or sirket
+  start_date?: string;    // Mapped to tanzim_tarihi
+  end_date?: string;      // Mapped to bitis_tarihi
+  premium_amount?: number;// Mapped to brut_prim
+  created_at?: string;
 }

@@ -38,24 +38,57 @@ serve(async (req) => {
     }
 
     // Validate and Prepare Data
-    // We inject the user.id as employee_id for security
-    const processedRows = rows.map(row => ({
-      policy_no: row.policy_no,
-      customer_name: row.customer_name,
-      branch: row.branch,
-      start_date: row.start_date,
-      end_date: row.end_date,
-      premium_amount: row.premium_amount,
-      commission_amount: row.commission_amount || 0,
-      employee_id: user.id, // Secure injection
-      // created_at is handled by DB default or preserved if provided
-    }))
+    const processedRows = rows.map(row => {
+      // Logic for 'durum' (status)
+      let durum = 'POLİÇE';
+      const tur = String(row.tur || '').toLowerCase();
+      if (tur.includes('iptal')) {
+        durum = 'İPTAL';
+      }
+      
+      // If updating existing record, we might need to check if existing one is canceled?
+      // But user said: "TÜR de iptal cümlesi geçerse duruma İPTAL geçmezse eklenen bütün kayıtların durumu poliçe olarak olacak"
+      // "ama poliçe noları tutarsa iptal ile normal kayıttada durumu iptal olsun"
+      // This implies if we upsert and match policy_no, we should update status to IPTAL if the new row says so.
+      
+      return {
+        // Mandatory Fields Mapping
+        policy_no: row.policy_no,
+        ad_soyad: row.ad_soyad,
+        
+        // Optional Fields
+        dogum_tarihi: row.dogum_tarihi,
+        sirket: row.sirket,
+        tarih: row.tarih, 
+        sasi: row.sasi,
+        plaka: row.plaka,
+        tc_vkn: row.tc_vkn,
+        belge_no: row.belge_no,
+        arac_cinsi: row.arac_cinsi,
+        brut_prim: row.brut_prim,
+        tur: row.tur,
+        kesen: row.kesen,
+        ilgili_kisi: row.ilgili_kisi,
+        acente: row.acente,
+        kart: row.kart,
+        ek_bilgiler_iletisim: row.ek_bilgiler_iletisim,
+        net_prim: row.net_prim,
+        komisyon: row.komisyon,
+        durum: durum, // Add status field
+        
+        employee_id: user.id,
+        // created_at is handled by DB default
+        updated_at: new Date().toISOString() // Ensure updated_at changes on upsert
+      };
+    })
 
-    // Perform Bulk Upsert
+    // Perform Bulk Upsert to 'policeler' table
+    // We use upsert to handle "kayıt eklenirken tarama yapalım poliçe no... aynı olan kayıt varsa üzerine yazsın"
+    // Since policy_no is UNIQUE, upsert will update if exists.
     const { data, error } = await supabaseClient
-      .from('policies')
+      .from('policeler')
       .upsert(processedRows, { 
-        onConflict: 'policy_no',
+        onConflict: 'police_no',
         ignoreDuplicates: false 
       })
       .select()

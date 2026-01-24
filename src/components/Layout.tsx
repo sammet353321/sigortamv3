@@ -259,16 +259,18 @@ export default function Layout() {
 
             {/* Desktop Header & Content */}
             <main className={clsx(
-                "flex-1 min-w-0",
-                location.pathname === '/employee/messages' 
-                    ? 'overflow-hidden flex flex-col' 
+                "flex-1 min-w-0 flex flex-col h-full",
+                // Remove specific conditions, make it generic for better layout handling
+                (location.pathname === '/employee/messages' || location.pathname.includes('/policies') || location.pathname.includes('/quotes'))
+                    ? 'overflow-hidden' 
                     : 'overflow-y-auto p-4 md:p-8'
             )}>
                 <div className={clsx(
-                    location.pathname === '/employee/messages' ? 'h-full' : 'max-w-7xl mx-auto'
+                    "flex-1 flex flex-col min-h-0", // Ensure flex container handles height correctly
+                    (location.pathname === '/employee/messages' || location.pathname.includes('/policies') || location.pathname.includes('/quotes')) ? 'h-full' : 'max-w-7xl mx-auto w-full'
                 )}>
-                    {location.pathname !== '/employee/messages' && (
-                    <header className="hidden md:flex justify-between items-center mb-8">
+                    {location.pathname !== '/employee/messages' && !location.pathname.includes('/policies') && !location.pathname.includes('/quotes') && (
+                    <header className="hidden md:flex justify-between items-center mb-8 shrink-0">
                         <h2 className="text-2xl font-bold text-gray-800">
                         {navItems.find(i => location.pathname.startsWith(i.path))?.label || 'Panel'}
                         </h2>
@@ -279,7 +281,9 @@ export default function Layout() {
                         </div>
                     </header>
                     )}
-                    <Outlet />
+                    <div className="flex-1 min-h-0 flex flex-col">
+                        <Outlet />
+                    </div>
                 </div>
             </main>
         </div>
