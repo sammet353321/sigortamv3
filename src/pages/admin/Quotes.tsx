@@ -71,7 +71,10 @@ export default function AdminQuotesPage() {
     };
 
     const fetchQuotes = async (offset = 0, currentSort = sort, search = debouncedSearch, isLoadMore = false) => {
-        if (!isLoadMore) setLoading(true);
+        if (!isLoadMore) {
+            setLoading(true);
+            setQuotes([]); // Clear table immediately for new filter
+        }
         else setLoadingMore(true);
 
         try {

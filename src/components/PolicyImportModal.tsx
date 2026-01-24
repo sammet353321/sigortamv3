@@ -200,7 +200,8 @@ export default function PolicyImportModal({ isOpen, onClose, onSuccess }: Import
                 'policeno', 'adsoyad', 'musteri', 'sigortali', 'unvan', 'plaka', 'tc', 'vkn', 'tcvkn', 'brutprim', 'tarih', 'sirket', 'acente', 'belgeno'
             ];
 
-            for (let i = 0; i < Math.min(rawData.length, 50); i++) {
+            // Increased scan depth to 100 for larger files with metadata headers
+            for (let i = 0; i < Math.min(rawData.length, 100); i++) {
                 const row = rawData[i];
                 if (!Array.isArray(row)) continue;
 
@@ -265,14 +266,33 @@ export default function PolicyImportModal({ isOpen, onClose, onSuccess }: Import
                      const police_no = String(getVal(row, ['policeno', 'police', 'policenumara']) || '').trim();
                      
                      // Name Logic: Try all aliases, then try concatenated "Ad" + "Soyad" columns if separate
-                     let ad_soyad = String(getVal(row, ['adsoyad', 'musteriadi', 'unvan', 'sigortali', 'sigortaliadi', 'musteri', 'adi', 'soyadi', 'adisoyadi', 'sigortaliadsoyad']) || '').trim();
+                     // Enhanced Fallback Logic for Large Files where "Ad Soyad" might be missing or named weirdly
+                     let ad_soyad = String(getVal(row, ['adsoyad', 'musteriadi', 'unvan', 'sigortali', 'sigortaliadi', 'musteri', 'adi', 'soyadi', 'adisoyadi', 'sigortaliadsoyad', 'isim']) || '').trim();
                      
-                     // Fallback: If ad_soyad is empty/dash, check separate Ad and Soyad columns
+                     // Fallback 1: Separate Ad and Soyad columns
                      if (!ad_soyad || ad_soyad === '-' || ad_soyad === '0') {
-                         const ad = String(getVal(row, ['ad', 'adi']) || '').trim();
+                         const ad = String(getVal(row, ['ad', 'adi', 'isim']) || '').trim();
                          const soyad = String(getVal(row, ['soyad', 'soyadi']) || '').trim();
                          if (ad || soyad) {
                              ad_soyad = `${ad} ${soyad}`.trim();
+                         }
+                     }
+
+                     // Fallback 2: Look for ANY column that looks like a name if we have a valid Policy No (Last Resort)
+                     if ((!ad_soyad || ad_soyad === '-' || ad_soyad === '0') && police_no.length > 3) {
+                         // Iterate through the row to find a string that looks like a name (not a date, not a number)
+                         // This is risky but helps when column mapping fails completely
+                         for (let c = 0; c < row.length; c++) {
+                             const val = String(row[c] || '').trim();
+                             if (val.length > 5 && !val.match(/[0-9]/) && val.includes(' ')) {
+                                 // Basic heuristic: contains space, no numbers, length > 5
+                                 // Check if it's not a known non-name column
+                                 const headerName = Object.keys(headerMap).find(key => headerMap[key] === c);
+                                 if (headerName && !['sirket', 'acente', 'adres', 'il', 'ilce', 'tur', 'durum'].some(k => headerName.includes(k))) {
+                                      ad_soyad = val;
+                                      break; 
+                                 }
+                             }
                          }
                      }
 
