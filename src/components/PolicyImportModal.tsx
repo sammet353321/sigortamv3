@@ -48,7 +48,7 @@ const STRICT_MAPPING: Record<string, keyof ParsedRow> = {
     'tarih': 'tarih',
     'sasi': 'sasi',
     'plaka': 'plaka',
-    'tcvkn': 'tc_vkn',
+    'tcvkn': 'tc_vkn', // Excel header: TC/VKN (slashes removed by normalize)
     'belgeno': 'belge_no',
     'araccinsi': 'arac_cinsi',
     'brutprim': 'brut_prim',
@@ -58,7 +58,7 @@ const STRICT_MAPPING: Record<string, keyof ParsedRow> = {
     'policeno': 'police_no',
     'acente': 'acente',
     'kart': 'kart',
-    'ekbilgileriletisim': 'ek_bilgiler_iletisim',
+    'ekbilgileriletisim': 'ek_bilgiler_iletisim', // Excel header: EK BİLGİLER / İLETİŞİM
     'netprim': 'net_prim',
     'komisyon': 'komisyon'
 };
@@ -263,8 +263,9 @@ export default function PolicyImportModal({ isOpen, onClose, onSuccess }: Import
 
             if (headerRowIndex === -1) {
                 setDebugInfo(`Başlık satırı bulunamadı. İlk 5 satır:\n${JSON.stringify(rawData.slice(0,5), null, 2)}`);
-                alert("HATA: Excel formatı uyumsuz! 'Tam Eşleşme' kuralına göre şu başlıklar zorunludur:\n" + 
-                      "AD SOYAD, DOĞUM TARİHİ, ŞİRKET, TARİH, ŞASİ, PLAKA, TC VKN, BELGE NO, ARAÇ CİNSİ, BRÜT PRİM, TÜR, KESEN, İLGİLİ KİŞİ, POLİÇE NO, ACENTE, KART, EK BİLGİLER İLETİŞİM, NET PRİM, KOMİSYON");
+                alert("HATA: Excel formatı uyumsuz! Sadece izin verilen şablon yüklenebilir.\n\n" + 
+                      "Beklenen Başlıklar (Sırası önemli değil):\n" +
+                      "AD SOYAD, DOĞUM TARİHİ, ŞİRKET, TARİH, ŞASİ, PLAKA, TC/VKN, BELGE NO, ARAÇ CİNSİ, BRÜT PRİM, TÜR, KESEN, İLGİLİ KİŞİ, POLİÇE NO, ACENTE, KART, EK BİLGİLER / İLETİŞİM, NET PRİM, KOMİSYON");
                 setStep('upload');
                 return;
             }
