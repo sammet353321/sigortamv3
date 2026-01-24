@@ -37,7 +37,7 @@ interface ParsedRow {
   error?: string;
 }
 
-const CHUNK_SIZE = 500;
+const CHUNK_SIZE = 100; // Reduced from 500 for safer/more stable processing
 
 export default function PolicyImportModal({ isOpen, onClose, onSuccess }: ImportModalProps) {
   const { user } = useAuth();
@@ -283,6 +283,9 @@ export default function PolicyImportModal({ isOpen, onClose, onSuccess }: Import
                      }
 
                      // Fallback 2: Look for ANY column that looks like a name if we have a valid Policy No (Last Resort)
+                     // DISABLED: This was causing issues by picking up 'Ek Bilgiler' instead of the real name.
+                     // The new enhanced header mapping above should handle most cases.
+                     /*
                      if ((!ad_soyad || ad_soyad === '-' || ad_soyad === '0') && police_no.length > 3) {
                          // Iterate through the row to find a string that looks like a name (not a date, not a number)
                          // This is risky but helps when column mapping fails completely
@@ -299,6 +302,7 @@ export default function PolicyImportModal({ isOpen, onClose, onSuccess }: Import
                              }
                          }
                      }
+                     */
 
                      const plaka = String(getVal(row, ['plaka', 'aracplaka']) || '').trim().toUpperCase();
 
@@ -368,7 +372,8 @@ export default function PolicyImportModal({ isOpen, onClose, onSuccess }: Import
                  setAnalyzeProgress(Math.min(100, Math.round((processed / total) * 100)));
 
                  if (processed < total) {
-                     setTimeout(processChunk, 0);
+                     // Add a small delay (10ms) to prevent UI freezing and allow browser to breathe
+                     setTimeout(processChunk, 10);
                  } else {
                      // DONE ANALYZING -> START IMPORT DIRECTLY
                      const validRows = parsedRows.filter(r => r.isValid);
@@ -516,6 +521,9 @@ export default function PolicyImportModal({ isOpen, onClose, onSuccess }: Import
                   const { error } = await supabase.from('policeler').upsert(dbRows, { onConflict: 'police_no' });
                   if (error) throw error;
               }
+              
+              // Small delay between DB writes to be safer
+              await new Promise(resolve => setTimeout(resolve, 50));
               
               setProgress(Math.round(((i + 1) / chunks) * 100));
           }
