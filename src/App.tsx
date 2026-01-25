@@ -8,6 +8,7 @@ import AdminDashboard from "@/pages/admin/Dashboard";
 import AdminQuotesPage from "@/pages/admin/Quotes";
 import AdminPoliciesPage from "@/pages/admin/Policies";
 import ManagementPage from "@/pages/admin/Management";
+import AdminEmployeesPage from "@/pages/admin/Employees";
 import UsersPage from "@/pages/admin/Users";
 import EmployeeDashboard from "@/pages/employee/Dashboard";
 import EmployeeQuoteDetail from "@/pages/employee/QuoteDetail";
