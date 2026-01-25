@@ -153,7 +153,7 @@ export default function PolicyTable() {
     setData([]); 
 
     try {
-      let query = supabase.from('policeler').select('*', { count: 'exact', head: false });
+      let query = supabase.from('policeler').select('*', { count: 'exact', head: false }).limit(50000);
 
       // Month Filter (Full Month Coverage Fix - Timezone Safe)
       if (selectedMonth !== 0) {

@@ -65,7 +65,8 @@ export default function EmployeeQuotesPage() {
       let query = supabase
         .from('teklifler')
         .select('*, ilgili_kisi:users!ilgili_kisi_id(name), kesen:users!kesen_id(name)')
-        .order('guncellenme_tarihi', { ascending: false });
+        .order('guncellenme_tarihi', { ascending: false })
+        .limit(50000);
 
       // Month Filter
       if (selectedMonth !== 0) {
