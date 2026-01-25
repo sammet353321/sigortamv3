@@ -194,9 +194,9 @@ export default function PolicyTable() {
         query = query.order('tarih', { ascending: true });
       }
       
-      // Pagination - DISABLED to load ALL data for the month at once as requested
-      // const pageSize = 50;
-      // query = query.range(offset, offset + pageSize - 1);
+      // Pagination - Re-enabled for infinite scroll to work properly
+      const pageSize = 50;
+      query = query.range(offset, offset + pageSize - 1);
 
       const { data: results, count, error } = await query;
       

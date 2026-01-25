@@ -23,9 +23,11 @@ interface Employee {
 
 interface Stats {
   totalPolicies: number;
+  totalQuotes: number;
   totalPremium: number;
   totalCommission: number;
   avgPremium: number;
+  conversionRate: number;
   dailyTrend: any[];
   companyDist: any[];
   productDist: any[];
@@ -61,9 +63,11 @@ export default function EmployeesPage() {
 
   const [stats, setStats] = useState<Stats>({
     totalPolicies: 0,
+    totalQuotes: 0,
     totalPremium: 0,
     totalCommission: 0,
     avgPremium: 0,
+    conversionRate: 0,
     dailyTrend: [],
     companyDist: [],
     productDist: []
@@ -76,7 +80,7 @@ export default function EmployeesPage() {
         const { data, error } = await supabase
           .from('users')
           .select('*')
-          .in('role', ['employee', 'sub_agent', 'admin'])
+          .in('role', ['employee', 'sub_agent']) // Removed 'admin'
           .order('name');
         
         if (error) throw error;
@@ -115,21 +119,35 @@ export default function EmployeesPage() {
 
         if (error) throw error;
 
+        // Fetch Quotes (Teklifler)
+        const { data: quotes, error: quotesError } = await supabase
+          .from('teklifler')
+          .select('id, sirket, tur, tarih')
+          .eq('employee_id', selectedEmp.id)
+          .gte('tarih', startStr)
+          .lte('tarih', endStr);
+
+        if (quotesError) throw quotesError;
+
         // Process Stats
         const totalPolicies = policies?.length || 0;
+        const totalQuotes = quotes?.length || 0;
         const totalPremium = policies?.reduce((sum, p) => sum + (Number(p.net_prim) || 0), 0) || 0;
         const totalCommission = policies?.reduce((sum, p) => sum + (Number(p.komisyon) || 0), 0) || 0;
         const avgPremium = totalPolicies > 0 ? totalPremium / totalPolicies : 0;
+        const conversionRate = totalQuotes > 0 ? (totalPolicies / totalQuotes) * 100 : 0;
 
         // Daily Trend
         const days = eachDayOfInterval({ start: startDate, end: endDate });
         const dailyTrend = days.map(day => {
           const dayStr = format(day, 'yyyy-MM-dd');
           const dayPolicies = policies?.filter(p => p.tarih === dayStr) || [];
+          const dayQuotes = quotes?.filter(q => q.tarih === dayStr) || [];
           return {
             date: format(day, 'd MMM', { locale: tr }),
             amount: dayPolicies.reduce((sum, p) => sum + (Number(p.net_prim) || 0), 0),
-            count: dayPolicies.length
+            policyCount: dayPolicies.length,
+            quoteCount: dayQuotes.length
           };
         });
 
@@ -144,21 +162,40 @@ export default function EmployeesPage() {
           .sort((a, b) => b.value - a.value)
           .slice(0, 5); // Top 5
 
-        // Product Distribution
-        const productMap = new Map();
-        policies?.forEach(p => {
-          const name = p.tur || 'Diğer';
-          productMap.set(name, (productMap.get(name) || 0) + 1);
+        // Product Distribution with Conversion Rates
+        const productStats = new Map();
+        
+        // Count Quotes per Product
+        quotes?.forEach(q => {
+            const name = q.tur || 'Diğer';
+            if (!productStats.has(name)) productStats.set(name, { quotes: 0, policies: 0 });
+            productStats.get(name).quotes++;
         });
-        const productDist = Array.from(productMap.entries())
-          .map(([name, value]) => ({ name, value }))
-          .sort((a, b) => b.value - a.value);
+
+        // Count Policies per Product
+        policies?.forEach(p => {
+            const name = p.tur || 'Diğer';
+            if (!productStats.has(name)) productStats.set(name, { quotes: 0, policies: 0 });
+            productStats.get(name).policies++;
+        });
+
+        const productDist = Array.from(productStats.entries())
+          .map(([name, stats]) => ({
+              name,
+              value: stats.policies, // For Pie Chart
+              quotes: stats.quotes,
+              policies: stats.policies,
+              conversion: stats.quotes > 0 ? (stats.policies / stats.quotes) * 100 : 0
+          }))
+          .sort((a, b) => b.policies - a.policies);
 
         setStats({
           totalPolicies,
+          totalQuotes,
           totalPremium,
           totalCommission,
           avgPremium,
+          conversionRate,
           dailyTrend,
           companyDist,
           productDist
@@ -226,7 +263,9 @@ export default function EmployeesPage() {
                 <p className={`font-medium truncate ${selectedEmp?.id === emp.id ? 'text-blue-900' : 'text-gray-800'}`}>
                   {emp.name || 'İsimsiz'}
                 </p>
-                <p className="text-xs text-gray-500 truncate capitalize">{emp.role?.replace('_', ' ')}</p>
+                <p className="text-xs text-gray-500 truncate capitalize">
+                  {emp.role === 'employee' ? 'Çalışan' : emp.role?.replace('_', ' ')}
+                </p>
               </div>
               {selectedEmp?.id === emp.id && <ChevronRight size={16} className="text-blue-600" />}
             </button>
@@ -249,7 +288,9 @@ export default function EmployeesPage() {
                   <div className="flex items-center gap-4 mt-1 text-sm text-gray-500">
                     <span className="flex items-center gap-1"><Mail size={14} /> {selectedEmp.email}</span>
                     {selectedEmp.phone && <span className="flex items-center gap-1"><Phone size={14} /> {selectedEmp.phone}</span>}
-                    <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded text-xs font-bold uppercase">{selectedEmp.role}</span>
+                    <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded text-xs font-bold uppercase">
+                      {selectedEmp.role === 'employee' ? 'Çalışan' : selectedEmp.role}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -301,8 +342,9 @@ export default function EmployeesPage() {
                       bgClass="bg-blue-50" 
                     />
                     <StatCard 
-                      title="Poliçe Adedi" 
-                      value={stats.totalPolicies} 
+                      title="Poliçeleşme Oranı" 
+                      value={`%${stats.conversionRate.toFixed(1)}`}
+                      subValue={`${stats.totalQuotes} Teklif / ${stats.totalPolicies} Poliçe`}
                       icon={FileText} 
                       colorClass="text-purple-600" 
                       bgClass="bg-purple-50" 
@@ -334,10 +376,13 @@ export default function EmployeesPage() {
                             <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{fontSize: 12, fill: '#9ca3af'}} />
                             <YAxis axisLine={false} tickLine={false} tick={{fontSize: 12, fill: '#9ca3af'}} tickFormatter={(v) => `${v/1000}k`} />
                             <Tooltip 
-                              formatter={(val: number) => formatCurrency(val)}
+                              formatter={(val: number, name: string) => [
+                                  name === 'amount' ? formatCurrency(val) : val, 
+                                  name === 'amount' ? 'Üretim' : (name === 'policyCount' ? 'Poliçe' : 'Teklif')
+                              ]}
                               contentStyle={{borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}}
                             />
-                            <Area type="monotone" dataKey="amount" stroke="#3b82f6" fill="url(#colorTrend)" strokeWidth={2} />
+                            <Area type="monotone" dataKey="amount" name="amount" stroke="#3b82f6" fill="url(#colorTrend)" strokeWidth={2} />
                           </AreaChart>
                         </ResponsiveContainer>
                       </div>
@@ -372,11 +417,17 @@ export default function EmployeesPage() {
                           </div>
                         </div>
                       </div>
-                      <div className="mt-4 flex flex-wrap gap-2 justify-center">
-                        {stats.productDist.slice(0, 4).map((entry, index) => (
-                          <div key={index} className="flex items-center gap-1 text-xs text-gray-600">
-                            <div className="w-2 h-2 rounded-full" style={{backgroundColor: COLORS[index % COLORS.length]}}></div>
-                            {entry.name}
+                      <div className="mt-4 space-y-2 overflow-y-auto max-h-[150px] pr-2 custom-scrollbar">
+                        {stats.productDist.map((entry, index) => (
+                          <div key={index} className="flex justify-between items-center text-xs p-2 hover:bg-gray-50 rounded">
+                            <div className="flex items-center gap-2">
+                                <div className="w-2 h-2 rounded-full flex-shrink-0" style={{backgroundColor: COLORS[index % COLORS.length]}}></div>
+                                <span className="font-medium text-gray-700">{entry.name}</span>
+                            </div>
+                            <div className="text-right">
+                                <div className="font-bold text-gray-900">{entry.policies} Poliçe</div>
+                                <div className="text-gray-500 text-[10px]">{entry.quotes} Teklif (%{entry.conversion.toFixed(0)})</div>
+                            </div>
                           </div>
                         ))}
                       </div>
