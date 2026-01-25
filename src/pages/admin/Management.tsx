@@ -13,21 +13,13 @@ interface Company {
 }
 
 export default function ManagementPage() {
-    const [activeTab, setActiveTab] = useState<'companies' | 'users' | 'chat-groups' | 'employee-groups' | 'settings'>('companies');
+    const [activeTab, setActiveTab] = useState<'users' | 'chat-groups' | 'employee-groups' | 'settings'>('users');
 
     return (
         <div className="space-y-6">
             <h1 className="text-2xl font-bold text-gray-800">Yönetim Paneli</h1>
             
             <div className="flex space-x-1 bg-gray-100 p-1 rounded-lg w-fit flex-wrap gap-y-1">
-                <button
-                    onClick={() => setActiveTab('companies')}
-                    className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                        activeTab === 'companies' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'
-                    }`}
-                >
-                    Şirketler
-                </button>
                 <button
                     onClick={() => setActiveTab('users')}
                     className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
@@ -63,6 +55,7 @@ export default function ManagementPage() {
             </div>
 
             <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+                {activeTab === 'companies' && <CompanyManagement />}
                 {activeTab === 'users' && <UsersPage />}
                 {activeTab === 'employee-groups' && <EmployeeGroupsManagement />}
                 {activeTab === 'chat-groups' && <ChatGroupsManagement />}

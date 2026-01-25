@@ -4,7 +4,7 @@ import { useAuth } from '@/context/AuthContext';
 import { Teklif } from '@/types';
 import { format } from 'date-fns';
 import { tr } from 'date-fns/locale';
-import { Search, Filter, Eye, ArrowRight, Download } from 'lucide-react';
+import { Search, Filter, Eye, ArrowRight, Download, Calendar, Loader2 } from 'lucide-react';
 import StatusBadge from '@/components/StatusBadge';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
@@ -15,13 +15,14 @@ export default function EmployeeQuotesPage() {
   const [quotes, setQuotes] = useState<Teklif[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1); // Default current month
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filterType, setFilterType] = useState<string>('all');
   const [uniqueTypes, setUniqueTypes] = useState<string[]>([]);
 
   useEffect(() => {
     fetchQuotes();
-  }, [user]);
+  }, [user, selectedMonth]);
 
   const handleCellContextMenu = (e: React.MouseEvent, text: string | number | null | undefined) => {
       e.preventDefault();
@@ -59,10 +60,34 @@ export default function EmployeeQuotesPage() {
     
     try {
       setLoading(true);
-      const { data, error } = await supabase
+      setQuotes([]);
+      
+      let query = supabase
         .from('teklifler')
         .select('*, ilgili_kisi:users!ilgili_kisi_id(name), kesen:users!kesen_id(name)')
         .order('guncellenme_tarihi', { ascending: false });
+
+      // Month Filter
+      if (selectedMonth !== 0) {
+        const year = new Date().getFullYear();
+        const startStr = `${year}-${String(selectedMonth).padStart(2, '0')}-01`;
+        
+        let endYear = year;
+        let endMonth = selectedMonth + 1;
+        if (endMonth > 12) {
+            endMonth = 1;
+            endYear = year + 1;
+        }
+        const endStr = `${endYear}-${String(endMonth).padStart(2, '0')}-01`;
+        
+        // Filter by created_at or tarih. Using 'tarih' as in PolicyTable if available, otherwise created_at
+        // Quotes usually use 'tarih' or 'created_at'. The original code uses 'guncellenme_tarihi' for sort.
+        // Let's check the schema or assume 'tarih' exists as seen in other files.
+        // In QuoteDetail.tsx and PolicyTable.tsx 'tarih' is used.
+        query = query.gte('tarih', startStr).lt('tarih', endStr);
+      }
+
+      const { data, error } = await query;
 
       if (error) throw error;
       setQuotes(data as any || []);
@@ -164,6 +189,29 @@ export default function EmployeeQuotesPage() {
               onChange={(e) => setSearchTerm(e.target.value)}
             />
           </div>
+
+          <div className="flex items-center gap-2 bg-white p-1 rounded-lg border border-gray-300">
+            <Calendar size={18} className="text-gray-500 ml-2" />
+            <select 
+                className="bg-transparent border-none text-sm font-medium text-gray-700 focus:ring-0 cursor-pointer py-1.5 outline-none"
+                value={selectedMonth}
+                onChange={(e) => setSelectedMonth(Number(e.target.value))}
+            >
+                <option value={0}>Tüm Aylar</option>
+                <option value={1}>Ocak</option>
+                <option value={2}>Şubat</option>
+                <option value={3}>Mart</option>
+                <option value={4}>Nisan</option>
+                <option value={5}>Mayıs</option>
+                <option value={6}>Haziran</option>
+                <option value={7}>Temmuz</option>
+                <option value={8}>Ağustos</option>
+                <option value={9}>Eylül</option>
+                <option value={10}>Ekim</option>
+                <option value={11}>Kasım</option>
+                <option value={12}>Aralık</option>
+            </select>
+          </div>
           
           <div className="relative">
             <Filter className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={18} />
@@ -228,11 +276,7 @@ export default function EmployeeQuotesPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100 text-sm">
-              {loading ? (
-                <tr>
-                  <td colSpan={21} className="px-6 py-8 text-center text-gray-500">Yükleniyor...</td>
-                </tr>
-              ) : filteredQuotes.length === 0 ? (
+              {filteredQuotes.length === 0 && !loading ? (
                 <tr>
                   <td colSpan={21} className="px-6 py-8 text-center text-gray-500">Kayıt bulunamadı.</td>
                 </tr>

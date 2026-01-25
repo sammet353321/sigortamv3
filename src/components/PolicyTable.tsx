@@ -42,7 +42,6 @@ export default function PolicyTable() {
   const { user } = useAuth();
   const [data, setData] = useState<Policy[]>([]);
   const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
   const [totalCount, setTotalCount] = useState(0);
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1); // Default current month
@@ -149,12 +148,9 @@ export default function PolicyTable() {
   };
 
   // Data Fetching Logic
-  const fetchPolicies = async (offset = 0, currentSort = sort, search = debouncedSearch, isLoadMore = false) => {
-    if (!isLoadMore) {
-        setLoading(true);
-        setData([]); // Clear table immediately for new filter
-    }
-    else setLoadingMore(true);
+  const fetchPolicies = async (currentSort = sort, search = debouncedSearch) => {
+    setLoading(true);
+    setData([]); 
 
     try {
       let query = supabase.from('policeler').select('*', { count: 'exact', head: false });
@@ -194,38 +190,27 @@ export default function PolicyTable() {
         query = query.order('tarih', { ascending: true });
       }
       
-      // Pagination - Re-enabled for infinite scroll to work properly
-      const pageSize = 50;
-      query = query.range(offset, offset + pageSize - 1);
+      // Pagination REMOVED - Fetch ALL data
+      // query = query.range(offset, offset + pageSize - 1);
 
       const { data: results, count, error } = await query;
       
       if (error) throw error;
       
-      if (offset === 0) {
-          setData(results || []);
-          // Reset scroll position when filter changes
-          if (tableContainerRef.current) tableContainerRef.current.scrollTop = 0;
-      } else {
-          // Prevent duplicates when appending
-          setData(prev => {
-              const newItems = results || [];
-              const existingIds = new Set(prev.map(p => p.id));
-              const uniqueNewItems = newItems.filter(p => !existingIds.has(p.id));
-              return [...prev, ...uniqueNewItems];
-          });
-      }
+      setData(results || []);
+      // Reset scroll position when filter changes
+      if (tableContainerRef.current) tableContainerRef.current.scrollTop = 0;
+
       setTotalCount(count || 0);
     } catch (error) {
       console.error('Error fetching policies:', error);
     } finally {
       setLoading(false);
-      setLoadingMore(false);
     }
   };
 
   useEffect(() => {
-    fetchPolicies(0, sort, debouncedSearch);
+    fetchPolicies(sort, debouncedSearch);
   }, [sort, selectedMonth, debouncedSearch, showCancelled]);
 
   const handleScroll = () => {
@@ -361,9 +346,17 @@ export default function PolicyTable() {
       {/* Standard HTML Table Container */}
       <div 
         ref={tableContainerRef}
-        onScroll={handleScroll}
         className="flex-1 overflow-auto bg-white border rounded-lg m-4 shadow-sm relative"
       >
+          {/* Loading Overlay */}
+          {loading && (
+            <div className="absolute inset-0 bg-white/80 z-40 flex flex-col items-center justify-center backdrop-blur-sm">
+                <Loader2 size={48} className="text-blue-600 animate-spin mb-3" />
+                <p className="text-blue-900 font-bold text-lg animate-pulse">Tablo Yükleniyor...</p>
+                <p className="text-blue-600 text-sm">Lütfen bekleyiniz</p>
+            </div>
+          )}
+
           <table className="w-full text-left border-collapse">
               <thead className="bg-gray-50 sticky top-0 z-30 shadow-sm">
                   <tr>
@@ -449,7 +442,7 @@ export default function PolicyTable() {
       {/* Footer Status */}
       <div className="bg-white border-t px-4 py-2 text-xs text-gray-500 flex justify-between items-center flex-shrink-0">
           <span>Toplam {totalCount} kayıt</span>
-          <span>{loading || loadingMore ? 'Yükleniyor...' : 'Hazır'}</span>
+          <span>{loading ? 'Yükleniyor...' : 'Hazır'}</span>
       </div>
 
       <PolicyImportModal 
