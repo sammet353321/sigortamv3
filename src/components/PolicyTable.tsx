@@ -214,14 +214,12 @@ export default function PolicyTable() {
   }, [sort, selectedMonth, debouncedSearch, showCancelled]);
 
   const handleScroll = () => {
-      if (!tableContainerRef.current) return;
-      
-      const { scrollTop, scrollHeight, clientHeight } = tableContainerRef.current;
-      
-      // Load more when scrolled to bottom (with 100px threshold)
-      if (scrollHeight - scrollTop - clientHeight < 100 && !loading && !loadingMore && data.length < totalCount) {
-          fetchPolicies(data.length, sort, debouncedSearch, true);
-      }
+      // Infinite scroll disabled as per request
+      // if (!tableContainerRef.current) return;
+      // const { scrollTop, scrollHeight, clientHeight } = tableContainerRef.current;
+      // if (scrollHeight - scrollTop - clientHeight < 100 && !loading && !loadingMore && data.length < totalCount) {
+      //    fetchPolicies(data.length, sort, debouncedSearch, true);
+      // }
   };
 
   const handleSort = (columnId: string) => {
@@ -384,51 +382,29 @@ export default function PolicyTable() {
                   </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                  {loading && data.length === 0 ? (
-                      Array.from({ length: 10 }).map((_, i) => (
-                          <tr key={i} className="animate-pulse">
-                              {columns.map((col, idx) => (
-                                  <td key={idx} className="p-4 border-b border-gray-100">
-                                      <div className="h-4 bg-gray-100 rounded w-3/4"></div>
-                                  </td>
-                              ))}
-                          </tr>
-                      ))
-                  ) : (
-                      data.map((policy, rowIndex) => (
-                          <tr 
-                            key={`${policy.id}-${rowIndex}`} 
-                            className={`
-                                transition-colors group
-                                ${policy.durum === 'İPTAL' ? 'bg-red-50 hover:bg-red-100' : 'hover:bg-blue-50/50'}
-                            `}
-                          >
-                              {columns.map((col, colIndex) => (
-                                  <td 
-                                      key={`${policy.id}-${col.id}`} 
-                                      className={`
-                                        p-3 text-sm border-b border-gray-100 
-                                        ${policy.durum === 'İPTAL' ? 'text-red-900 border-red-100' : 'text-gray-700 group-hover:bg-blue-50/50'}
-                                      `}
-                                  >
-                                      <div className="truncate" style={{ maxWidth: col.minWidth }}>
-                                          {renderCell(policy, col.id as string)}
-                                      </div>
-                                  </td>
-                              ))}
-                          </tr>
-                      ))
-                  )}
-                  {loadingMore && (
-                      <tr>
-                          <td colSpan={columns.length} className="p-4 text-center text-gray-500 bg-gray-50">
-                              <div className="flex items-center justify-center gap-2">
-                                  <Loader2 size={16} className="animate-spin" />
-                                  Daha fazla yükleniyor...
-                              </div>
-                          </td>
+                  {data.map((policy, rowIndex) => (
+                      <tr 
+                        key={`${policy.id}-${rowIndex}`} 
+                        className={`
+                            transition-colors group
+                            ${policy.durum === 'İPTAL' ? 'bg-red-50 hover:bg-red-100' : 'hover:bg-blue-50/50'}
+                        `}
+                      >
+                          {columns.map((col, colIndex) => (
+                              <td 
+                                  key={`${policy.id}-${col.id}`} 
+                                  className={`
+                                    p-3 text-sm border-b border-gray-100 
+                                    ${policy.durum === 'İPTAL' ? 'text-red-900 border-red-100' : 'text-gray-700 group-hover:bg-blue-50/50'}
+                                  `}
+                              >
+                                  <div className="truncate" style={{ maxWidth: col.minWidth }}>
+                                      {renderCell(policy, col.id as string)}
+                                  </div>
+                              </td>
+                          ))}
                       </tr>
-                  )}
+                  ))}
               </tbody>
           </table>
           
