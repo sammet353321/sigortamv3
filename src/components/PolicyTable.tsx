@@ -153,15 +153,13 @@ export default function PolicyTable() {
     setData([]); 
 
     try {
-      let query = supabase.from('policeler').select('*', { count: 'exact', head: false }).limit(50000);
+      let query = supabase.from('policeler').select('*', { count: 'exact', head: false });
 
       // Month Filter (Full Month Coverage Fix - Timezone Safe)
       if (selectedMonth !== 0) {
             const year = new Date().getFullYear();
-            // Construct YYYY-MM-DD strings manually to avoid timezone shifts
             const startStr = `${year}-${String(selectedMonth).padStart(2, '0')}-01`;
             
-            // Calculate next month for the end date (exclusive)
             let endYear = year;
             let endMonth = selectedMonth + 1;
             if (endMonth > 12) {
@@ -190,18 +188,39 @@ export default function PolicyTable() {
         query = query.order('tarih', { ascending: true });
       }
       
-      // Pagination REMOVED - Fetch ALL data
-      // query = query.range(offset, offset + pageSize - 1);
+      // Batch Fetching to bypass 1000 row limit
+      const pageSize = 1000;
+      let allData: any[] = [];
+      let page = 0;
+      let hasMore = true;
 
-      const { data: results, count, error } = await query;
+      while (hasMore) {
+          // Clone the query to avoid modifying the original query builder state incorrectly if it mutates
+          // Supabase query builders are immutable until executed, but let's be safe by re-applying range
+          const { data: batchData, error } = await query.range(page * pageSize, (page + 1) * pageSize - 1);
+          
+          if (error) throw error;
+          
+          if (batchData && batchData.length > 0) {
+              allData = [...allData, ...batchData];
+              if (batchData.length < pageSize) {
+                  hasMore = false;
+              }
+          } else {
+              hasMore = false;
+          }
+          page++;
+          
+          // Safety break to prevent infinite loops in case of weird API behavior
+          if (page > 100) hasMore = false; // Max 100,000 rows
+      }
       
-      if (error) throw error;
+      setData(allData);
       
-      setData(results || []);
       // Reset scroll position when filter changes
       if (tableContainerRef.current) tableContainerRef.current.scrollTop = 0;
 
-      setTotalCount(count || 0);
+      setTotalCount(allData.length);
     } catch (error) {
       console.error('Error fetching policies:', error);
     } finally {

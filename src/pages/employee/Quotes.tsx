@@ -65,8 +65,7 @@ export default function EmployeeQuotesPage() {
       let query = supabase
         .from('teklifler')
         .select('*, ilgili_kisi:users!ilgili_kisi_id(name), kesen:users!kesen_id(name)')
-        .order('guncellenme_tarihi', { ascending: false })
-        .limit(50000);
+        .order('guncellenme_tarihi', { ascending: false });
 
       // Month Filter
       if (selectedMonth !== 0) {
@@ -81,19 +80,37 @@ export default function EmployeeQuotesPage() {
         }
         const endStr = `${endYear}-${String(endMonth).padStart(2, '0')}-01`;
         
-        // Filter by created_at or tarih. Using 'tarih' as in PolicyTable if available, otherwise created_at
-        // Quotes usually use 'tarih' or 'created_at'. The original code uses 'guncellenme_tarihi' for sort.
-        // Let's check the schema or assume 'tarih' exists as seen in other files.
-        // In QuoteDetail.tsx and PolicyTable.tsx 'tarih' is used.
         query = query.gte('tarih', startStr).lt('tarih', endStr);
       }
 
-      const { data, error } = await query;
+      // Batch Fetching to bypass 1000 row limit
+      const pageSize = 1000;
+      let allData: any[] = [];
+      let page = 0;
+      let hasMore = true;
 
-      if (error) throw error;
-      setQuotes(data as any || []);
+      while (hasMore) {
+          const { data: batchData, error } = await query.range(page * pageSize, (page + 1) * pageSize - 1);
+          
+          if (error) throw error;
+          
+          if (batchData && batchData.length > 0) {
+              allData = [...allData, ...batchData];
+              if (batchData.length < pageSize) {
+                  hasMore = false;
+              }
+          } else {
+              hasMore = false;
+          }
+          page++;
+          
+          // Safety break
+          if (page > 100) hasMore = false;
+      }
+
+      setQuotes(allData as any || []);
       
-      const types = Array.from(new Set(data?.map((q: any) => q.tur).filter(Boolean) as string[]));
+      const types = Array.from(new Set(allData?.map((q: any) => q.tur).filter(Boolean) as string[]));
       setUniqueTypes(types);
 
     } catch (error) {
