@@ -104,6 +104,7 @@ export default function Layout() {
     { label: 'Taliler', path: '/admin/sub-agents', icon: Users, roles: ['admin'] },
     { label: 'WhatsApp Bağla', path: '/admin/whatsapp-connection', icon: Smartphone, roles: ['admin'] },
     { label: 'Yönetim', path: '/admin/management', icon: Users, roles: ['admin'] },
+    { label: 'Çalışanlar', path: '/admin/employees', icon: BarChart3, roles: ['admin'] },
     
     // Employee Routes
     { label: 'Mesajlar', path: '/employee/messages', icon: MessageCircle, roles: ['employee'] },

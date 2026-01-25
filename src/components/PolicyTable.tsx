@@ -46,6 +46,7 @@ export default function PolicyTable() {
   const [totalCount, setTotalCount] = useState(0);
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1); // Default current month
+  const [showCancelled, setShowCancelled] = useState(true);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   
   // Sort State - Default Ascending by Date
@@ -158,12 +159,27 @@ export default function PolicyTable() {
     try {
       let query = supabase.from('policeler').select('*', { count: 'exact', head: false });
 
-      // Month Filter
+      // Month Filter (Full Month Coverage Fix - Timezone Safe)
       if (selectedMonth !== 0) {
             const year = new Date().getFullYear();
-            const startStr = new Date(year, selectedMonth - 1, 1).toISOString().split('T')[0];
-            const endStr = new Date(year, selectedMonth, 1).toISOString().split('T')[0];
+            // Construct YYYY-MM-DD strings manually to avoid timezone shifts
+            const startStr = `${year}-${String(selectedMonth).padStart(2, '0')}-01`;
+            
+            // Calculate next month for the end date (exclusive)
+            let endYear = year;
+            let endMonth = selectedMonth + 1;
+            if (endMonth > 12) {
+                endMonth = 1;
+                endYear = year + 1;
+            }
+            const endStr = `${endYear}-${String(endMonth).padStart(2, '0')}-01`;
+            
             query = query.gte('tarih', startStr).lt('tarih', endStr);
+      }
+
+      // Cancelled Filter
+      if (!showCancelled) {
+          query = query.not('durum', 'ilike', '%iptal%');
       }
 
       // Text Search
@@ -191,7 +207,13 @@ export default function PolicyTable() {
           // Reset scroll position when filter changes
           if (tableContainerRef.current) tableContainerRef.current.scrollTop = 0;
       } else {
-          setData(prev => [...prev, ...(results || [])]);
+          // Prevent duplicates when appending
+          setData(prev => {
+              const newItems = results || [];
+              const existingIds = new Set(prev.map(p => p.id));
+              const uniqueNewItems = newItems.filter(p => !existingIds.has(p.id));
+              return [...prev, ...uniqueNewItems];
+          });
       }
       setTotalCount(count || 0);
     } catch (error) {
@@ -204,7 +226,7 @@ export default function PolicyTable() {
 
   useEffect(() => {
     fetchPolicies(0, sort, debouncedSearch);
-  }, [sort, selectedMonth, debouncedSearch]);
+  }, [sort, selectedMonth, debouncedSearch, showCancelled]);
 
   const handleScroll = () => {
       if (!tableContainerRef.current) return;
@@ -302,6 +324,19 @@ export default function PolicyTable() {
                     <option value={11}>Kasım</option>
                     <option value={12}>Aralık</option>
                 </select>
+            </div>
+
+            <div className="flex items-center gap-2 bg-gray-50 p-2 rounded-lg border border-gray-200 px-3 h-[38px]">
+                <input 
+                    type="checkbox" 
+                    id="showCancelledTable" 
+                    checked={showCancelled} 
+                    onChange={(e) => setShowCancelled(e.target.checked)}
+                    className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500 cursor-pointer"
+                />
+                <label htmlFor="showCancelledTable" className="text-sm font-medium text-gray-700 cursor-pointer select-none">
+                    İptalleri Göster
+                </label>
             </div>
         </div>
 

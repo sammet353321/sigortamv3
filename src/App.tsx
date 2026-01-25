@@ -43,7 +43,7 @@ export default function App() {
                 <Route element={<PrivateRoute allowedRoles={['admin']} />}>
                   <Route path="/admin/dashboard" element={<AdminDashboard />} />
                   <Route path="/admin/users" element={<UsersPage />} />
-                  <Route path="/admin/employees" element={<Navigate to="/admin/management" replace />} />
+                  <Route path="/admin/employees" element={<AdminEmployeesPage />} />
                   <Route path="/admin/management" element={<ManagementPage />} />
                   <Route path="/admin/quotes" element={<AdminQuotesPage />} />
                   <Route path="/admin/policies" element={<AdminPoliciesPage />} />

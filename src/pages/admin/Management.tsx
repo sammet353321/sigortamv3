@@ -63,7 +63,6 @@ export default function ManagementPage() {
             </div>
 
             <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-                {activeTab === 'companies' && <CompanyManagement />}
                 {activeTab === 'users' && <UsersPage />}
                 {activeTab === 'employee-groups' && <EmployeeGroupsManagement />}
                 {activeTab === 'chat-groups' && <ChatGroupsManagement />}

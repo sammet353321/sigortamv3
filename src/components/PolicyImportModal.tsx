@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
-import { X, Upload, FileSpreadsheet } from 'lucide-react';
+import { X, Upload, FileSpreadsheet, AlertTriangle, CheckCircle, Loader2 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
 interface ImportModalProps {
@@ -10,162 +10,103 @@ interface ImportModalProps {
   onSuccess: () => void;
 }
 
-interface ParsedRow {
-  id: number;
-  ad_soyad: string;
-  dogum_tarihi?: string;
-  sirket?: string;
-  tarih?: string;
-  sasi?: string;
-  plaka: string;
-  tc_vkn?: string;
-  belge_no?: string;
-  arac_cinsi?: string;
-  brut_prim?: number;
-  tur?: string;
-  kesen?: string;
-  ilgili_kisi?: string;
-  police_no: string;
-  acente?: string;
-  kart?: string;
-  ek_bilgiler_iletisim?: string;
-  net_prim?: number;
-  komisyon?: number;
-  tanzim_tarihi?: string | null;
-  durum: string;
-  isValid: boolean;
-  error?: string;
-}
+// 1. Strict Header Validation List
+const EXPECTED_HEADERS = [
+  'AD SOYAD', 'DOĞUM TARİHİ', 'ŞİRKET', 'TARİH', 'ŞASİ', 'PLAKA', 
+  'TC/VKN', 'BELGE NO', 'ARAÇ CİNSİ', 'BRÜT PRİM', 'TÜR', 'KESEN', 
+  'İLGİLİ KİŞİ', 'POLİÇE NO', 'ACENTE', 'KART', 'EK BİLGİLER / İLETİŞİM', 
+  'NET PRİM', 'KOMİSYON'
+];
 
-const CHUNK_SIZE = 100;
-
-// STRICT HEADER MAPPING (User Defined)
-const STRICT_MAPPING: Record<string, keyof ParsedRow> = {
-    'adsoyad': 'ad_soyad',
-    'dogumtarihi': 'dogum_tarihi',
-    'sirket': 'sirket',
-    'tarih': 'tarih',
-    'sasi': 'sasi',
-    'plaka': 'plaka',
-    'tcvkn': 'tc_vkn',
-    'belgeno': 'belge_no',
-    'araccinsi': 'arac_cinsi',
-    'brutprim': 'brut_prim',
-    'tur': 'tur',
-    'kesen': 'kesen',
-    'ilgilikisi': 'ilgili_kisi',
-    'policeno': 'police_no',
-    'acente': 'acente',
-    'kart': 'kart',
-    'ekbilgileriletisim': 'ek_bilgiler_iletisim',
-    'netprim': 'net_prim',
-    'komisyon': 'komisyon'
-};
-
-const REQUIRED_HEADERS = Object.keys(STRICT_MAPPING);
+const CHUNK_SIZE = 1000;
 
 export default function PolicyImportModal({ isOpen, onClose, onSuccess }: ImportModalProps) {
   const { user } = useAuth();
-  const [step, setStep] = useState<'upload' | 'analyzing' | 'importing'>('upload');
+  const [step, setStep] = useState<'upload' | 'analyzing' | 'importing' | 'success' | 'error'>('upload');
   const [progress, setProgress] = useState(0);
-  const [analyzeProgress, setAnalyzeProgress] = useState(0);
-  const [debugInfo, setDebugInfo] = useState<string>("");
+  const [statusMessage, setStatusMessage] = useState("");
+  const [errorDetails, setErrorDetails] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // --- UTILS ---
-  const normalizeHeader = (header: string) => {
-    return String(header)
-      .toLocaleLowerCase('tr-TR')
-      .replace(/ğ/g, 'g')
-      .replace(/ü/g, 'u')
-      .replace(/ş/g, 's')
-      .replace(/ı/g, 'i')
-      .replace(/ö/g, 'o')
-      .replace(/ç/g, 'c')
-      .replace(/[^a-z0-9]/g, '');
+
+  // Helper to convert Excel date (serial or string) to ISO 8601 (YYYY-MM-DD)
+  // Returns Date object for calculations, or null
+  const parseDateObj = (val: any): Date | null => {
+    if (!val) return null;
+    try {
+        if (typeof val === 'number') {
+            const utcMs = Math.round((val - 25569) * 86400 * 1000) + 43200000;
+            return new Date(utcMs);
+        }
+        
+        const strVal = String(val).trim();
+        if (!strVal || strVal === '-' || strVal === '0') return null;
+
+        const parts = strVal.split(/[./-]/);
+        if (parts.length === 3) {
+            let d = parseInt(parts[0]);
+            let m = parseInt(parts[1]);
+            let y = parseInt(parts[2]);
+            if (y < 100) y += 2000;
+            return new Date(Date.UTC(y, m - 1, d));
+        }
+        
+        const d = new Date(strVal);
+        if (!isNaN(d.getTime())) return d;
+    } catch (e) { console.warn(e); }
+    return null;
   };
 
-  const parseDate = (val: any): Date | undefined => {
-      if (!val) return undefined;
-      try {
-          if (typeof val === 'number') {
-              const utcMs = Math.round((val - 25569) * 86400 * 1000) + 43200000;
-              const d = new Date(utcMs);
-              if (!isNaN(d.getTime())) return d;
-          }
-
-          let strVal = String(val).trim();
-          if (!strVal || strVal === '-' || strVal === '0') return undefined;
-          strVal = strVal.split(' ')[0].replace(/[^0-9./-]/g, '');
-
-          const match = strVal.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})$/);
-          if (match) {
-              let day = parseInt(match[1]);
-              let month = parseInt(match[2]);
-              let year = parseInt(match[3]);
-              if (year < 100) year += 2000;
-              const d = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
-              if (!isNaN(d.getTime())) return d;
-          }
-
-          const isoMatch = strVal.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-          if (isoMatch) {
-               let year = parseInt(isoMatch[1]);
-               let month = parseInt(isoMatch[2]);
-               let day = parseInt(isoMatch[3]);
-               const d = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
-               if(!isNaN(d.getTime())) return d;
-          }
-
-          if (strVal.includes('.')) {
-              const parts = strVal.split('.');
-              if (parts.length === 3) {
-                  let d = parseInt(parts[0]);
-                  let m = parseInt(parts[1]);
-                  let y = parseInt(parts[2]);
-                  if (y < 100) y += 2000;
-                  const dateObj = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
-                  if (!isNaN(dateObj.getTime())) return dateObj;
-              }
-          }
-          return undefined;
-      } catch {
-          return undefined;
-      }
+  const toISO = (d: Date | null): string | null => {
+      return d ? d.toISOString().split('T')[0] : null;
   };
 
-  const toDBDate = (d: Date | undefined): string | null => {
-      if (!d) return null;
-      return d.toISOString().split('T')[0];
+  // Helper to clean numbers (remove currency symbols, handle Turkish format)
+  const parseNumber = (val: any): number => {
+    if (val === undefined || val === null || val === '') return 0;
+    if (typeof val === 'number') return val;
+
+    let strVal = String(val).trim();
+    // Remove all non-numeric chars except . , -
+    strVal = strVal.replace(/[^\d.,-]/g, '');
+    
+    if (!strVal) return 0;
+
+    // TURKISH FORMAT PRIORITY
+    // 1. If contains comma (,), it is the decimal separator.
+    if (strVal.includes(',')) {
+        // Remove all dots (thousands separators)
+        strVal = strVal.replace(/\./g, '');
+        // Replace comma with dot for JS parseFloat
+        strVal = strVal.replace(',', '.');
+    }
+    // 2. If contains ONLY dots (e.g. 1.500 or 1.000.000 or 12.50)
+    else if (strVal.includes('.')) {
+        const parts = strVal.split('.');
+        
+        // If multiple dots (1.000.000), they are definitely thousands separators
+        if (parts.length > 2) {
+             strVal = strVal.replace(/\./g, '');
+        }
+        // If single dot (1.500 or 12.50)
+        else {
+            const decimalPart = parts[1];
+            // Heuristic: If exactly 3 digits after dot, assume it's a thousands separator (1.500 -> 1500)
+            // This fixes "Brüt Prim" issue where 1.500 was read as 1.5
+            if (decimalPart && decimalPart.length === 3) {
+                 strVal = strVal.replace(/\./g, '');
+            }
+            // Otherwise (12.50, 1.5, 10.99) treat as decimal
+        }
+    }
+
+    const num = parseFloat(strVal);
+    return isNaN(num) ? 0 : num;
   };
 
-  const parseMoney = (val: any): number => {
-      if (val === undefined || val === null || val === '') return 0;
-      if (typeof val === 'number') return val;
-      
-      let strVal = String(val).trim();
-      if (!strVal || strVal === '-') return 0;
-      strVal = strVal.replace(/[^\d.,-]/g, '');
-
-      const lastDot = strVal.lastIndexOf('.');
-      const lastComma = strVal.lastIndexOf(',');
-
-      if (lastDot === -1 && lastComma === -1) {
-          return parseFloat(strVal) || 0;
-      }
-
-      if (lastComma > lastDot) {
-          strVal = strVal.replace(/\./g, '').replace(',', '.');
-      } 
-      else if (lastComma === -1 && lastDot > -1) {
-          strVal = strVal.replace(/\./g, '');
-      }
-      else {
-           strVal = strVal.replace(/,/g, '');
-      }
-
-      const num = parseFloat(strVal);
-      return isNaN(num) ? 0 : num;
+  const cleanString = (val: any): string => {
+    return val ? String(val).trim() : '';
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -173,292 +114,256 @@ export default function PolicyImportModal({ isOpen, onClose, onSuccess }: Import
     if (!file) return;
 
     setStep('analyzing');
-    setAnalyzeProgress(0);
-    setDebugInfo("");
+    setStatusMessage("Dosya okunuyor...");
+    setErrorDetails([]);
 
-    setTimeout(async () => {
-        try {
-            const buffer = await file.arrayBuffer();
-            const workbook = XLSX.read(buffer, { type: 'array' });
-            const sheetName = workbook.SheetNames[0];
-            const sheet = workbook.Sheets[sheetName];
-            const rawData = XLSX.utils.sheet_to_json(sheet, { header: 1 }) as any[][];
-            
-            if (!rawData || rawData.length === 0) {
-                alert("Dosya boş.");
-                setStep('upload');
-                return;
-            }
+    try {
+        const buffer = await file.arrayBuffer();
+        const workbook = XLSX.read(buffer, { type: 'array' });
+        const sheetName = workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        
+        // Convert to JSON (Array of Arrays) to check headers first
+        const rawData = XLSX.utils.sheet_to_json(sheet, { header: 1 });
 
-            let headerRowIndex = -1;
-            let dbColMap: Record<string, number> = {};
-
-            for (let i = 0; i < Math.min(rawData.length, 100); i++) {
-                const row = rawData[i];
-                if (!Array.isArray(row)) continue;
-
-                const normalizedRow = row.map(cell => normalizeHeader(String(cell || '')));
-                const missingHeaders = REQUIRED_HEADERS.filter(req => !normalizedRow.includes(req));
-
-                if (missingHeaders.length === 0) {
-                    headerRowIndex = i;
-                    normalizedRow.forEach((h, colIdx) => {
-                        const dbField = STRICT_MAPPING[h];
-                        if (dbField) {
-                            dbColMap[dbField] = colIdx;
-                        }
-                    });
-                    break;
-                }
-            }
-
-            if (headerRowIndex === -1) {
-                setDebugInfo(`Başlık satırı bulunamadı. İlk 5 satır:\n${JSON.stringify(rawData.slice(0,5), null, 2)}`);
-                alert("HATA: Excel formatı uyumsuz! Sadece izin verilen şablon yüklenebilir.\n\n" + 
-                      "Beklenen Başlıklar (Sırası önemli değil):\n" +
-                      "AD SOYAD, DOĞUM TARİHİ, ŞİRKET, TARİH, ŞASİ, PLAKA, TC/VKN, BELGE NO, ARAÇ CİNSİ, BRÜT PRİM, TÜR, KESEN, İLGİLİ KİŞİ, POLİÇE NO, ACENTE, KART, EK BİLGİLER / İLETİŞİM, NET PRİM, KOMİSYON");
-                setStep('upload');
-                return;
-            }
-
-            const dataRows = rawData.slice(headerRowIndex + 1);
-            const total = dataRows.length;
-            const parsedRows: ParsedRow[] = [];
-            
-            const getCol = (row: any[], field: keyof ParsedRow | string) => {
-                const idx = dbColMap[field as string];
-                if (idx !== undefined && row[idx] !== undefined) {
-                    return row[idx];
-                }
-                return undefined;
-            };
-
-            let processed = 0;
-            
-            const processChunk = async () => {
-                 const end = Math.min(processed + 2000, total);
-                 for (let i = processed; i < end; i++) {
-                     const row = dataRows[i];
-                     if (!row || row.length === 0) continue;
-
-                     const firstCell = normalizeHeader(String(row[0] || ''));
-                     if (firstCell.includes('policeno') || firstCell.includes('adsoyad')) continue;
-
-                     const police_no = String(getCol(row, 'police_no') || '').trim();
-                     const ad_soyad = String(getCol(row, 'ad_soyad') || '').trim();
-                     const plaka = String(getCol(row, 'plaka') || '').trim().toUpperCase();
-
-                     if (!police_no && !plaka && !ad_soyad) continue;
-
-                     const tur = String(getCol(row, 'tur') || '').trim();
-                     let durum = 'POLİÇE';
-                     if (tur.toLocaleLowerCase('tr-TR').includes('iptal')) {
-                         durum = 'İPTAL';
-                     }
-
-                     const dateRaw = getCol(row, 'tarih');
-                     let endDate = parseDate(dateRaw) || new Date();
-                     
-                     let tanzimDate = new Date(endDate);
-                     if (durum !== 'İPTAL') {
-                         tanzimDate.setFullYear(tanzimDate.getFullYear() - 1);
-                     }
-                     
-                     const dbTarihStr = toDBDate(endDate) || new Date().toISOString().split('T')[0];
-                     const dbTanzimTarihiStr = toDBDate(tanzimDate);
-                     const dogumDate = parseDate(getCol(row, 'dogum_tarihi'));
-
-                     parsedRows.push({
-                         id: i,
-                         police_no: police_no,
-                         ad_soyad: ad_soyad || '-',
-                         plaka: plaka || '-',
-                         dogum_tarihi: toDBDate(dogumDate) || undefined,
-                         sirket: String(getCol(row, 'sirket') || '-'),
-                         tarih: dbTarihStr,
-                         tanzim_tarihi: dbTanzimTarihiStr, 
-                         sasi: String(getCol(row, 'sasi') || '-'),
-                         tc_vkn: String(getCol(row, 'tc_vkn') || '-'),
-                         belge_no: String(getCol(row, 'belge_no') || '-'),
-                         arac_cinsi: String(getCol(row, 'arac_cinsi') || '-'),
-                         brut_prim: parseMoney(getCol(row, 'brut_prim')),
-                         net_prim: parseMoney(getCol(row, 'net_prim')),
-                         komisyon: parseMoney(getCol(row, 'komisyon')),
-                         tur: tur || '-',
-                         kesen: String(getCol(row, 'kesen') || '-'),
-                         ilgili_kisi: String(getCol(row, 'ilgili_kisi') || '-'),
-                         acente: String(getCol(row, 'acente') || '-'),
-                         kart: String(getCol(row, 'kart') || '-'),
-                         ek_bilgiler_iletisim: String(getCol(row, 'ek_bilgiler_iletisim') || '-'),
-                         durum: durum,
-                         isValid: !!police_no, 
-                         error: !police_no ? 'Poliçe No Eksik' : undefined
-                     });
-                 }
-                 
-                 processed = end;
-                 setAnalyzeProgress(Math.min(100, Math.round((processed / total) * 100)));
-
-                 if (processed < total) {
-                     setTimeout(processChunk, 10);
-                 } else {
-                     const validRows = parsedRows.filter(r => r.isValid);
-                     if (validRows.length === 0) {
-                         alert("Başlıklar bulundu ancak geçerli poliçe numarası içeren kayıt okunamadı. Sütun isimlerini kontrol ediniz.");
-                         setStep('upload');
-                     } else {
-                         await startAutoImport(validRows);
-                     }
-                 }
-            };
-            processChunk();
-
-        } catch (error: any) {
-            console.error(error);
-            alert("Hata: " + error.message);
-            onClose();
+        if (!rawData || rawData.length === 0) {
+            throw new Error("Dosya boş.");
         }
-    }, 100);
-  };
 
-  const startAutoImport = async (validRows: ParsedRow[]) => {
-      if (!user) { alert("Oturum yok."); return; }
-      setStep('importing');
-      setProgress(0);
-      
-      const total = validRows.length;
-      const chunks = Math.ceil(total / CHUNK_SIZE);
+        // 1. Strict Header Validation
+        const fileHeaders = (rawData[0] as any[]).map(h => String(h).trim());
+        const missingHeaders = EXPECTED_HEADERS.filter(h => !fileHeaders.includes(h));
 
-      try {
-          for (let i = 0; i < chunks; i++) {
-              const batch = validRows.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
-              
-              const uniqueBatchMap = new Map();
-              
-              const policeNos = batch.map(b => b.police_no);
-              const { data: existingPolicies } = await supabase
-                .from('policeler')
-                .select('police_no, ad_soyad, tur, brut_prim')
-                .in('police_no', policeNos);
+        if (missingHeaders.length > 0) {
+            setStep('error');
+            setErrorDetails([
+                `HATA: Excel başlıkları beklenen formatla uyuşmuyor.`,
+                `Eksik veya Hatalı Başlıklar: ${missingHeaders.join(', ')}`,
+                `Beklenen: ${EXPECTED_HEADERS.join(', ')}`
+            ]);
+            return;
+        }
 
-              const existingMap = new Map();
-              if (existingPolicies) {
-                  existingPolicies.forEach(p => existingMap.set(p.police_no, p));
-              }
+        // Map headers to indices
+        const headerMap: Record<string, number> = {};
+        fileHeaders.forEach((h, i) => {
+            if (EXPECTED_HEADERS.includes(h)) {
+                headerMap[h] = i;
+            }
+        });
 
-              batch.forEach(r => {
-                  const existing = existingMap.get(r.police_no);
-                  let shouldUpsert = true;
+        // 2. Process Data
+        setStep('importing');
+        const dataRows = rawData.slice(1) as any[][]; // Skip header
+        const totalRows = dataRows.length;
+        
+        if (totalRows === 0) {
+            throw new Error("Başlıklar doğru ancak veri bulunamadı.");
+        }
 
-                  if (existing) {
-                      const nameMatch = existing.ad_soyad === r.ad_soyad;
-                      const turMatch = existing.tur === r.tur;
-                      const primMatch = Math.abs((existing.brut_prim || 0) - (r.brut_prim || 0)) < 0.01;
+        let processedCount = 0;
+        
+        // Process in chunks
+        for (let i = 0; i < totalRows; i += CHUNK_SIZE) {
+            const chunk = dataRows.slice(i, i + CHUNK_SIZE);
+            // Use Map for deduplication based on police_no
+            const uniqueRowsMap = new Map();
 
-                      if (!nameMatch || !turMatch || !primMatch) {
-                          shouldUpsert = false;
-                      }
-                  }
+            for (const row of chunk) {
+                // Skip empty rows
+                if (!row || row.length === 0) continue;
 
-                  if (shouldUpsert) {
-                        uniqueBatchMap.set(r.police_no, {
-                            police_no: r.police_no,
-                            ad_soyad: r.ad_soyad,
-                            plaka: r.plaka,
-                            tc_vkn: r.tc_vkn,
-                            sirket: r.sirket,
-                            tarih: r.tarih,
-                            tanzim_tarihi: r.tanzim_tarihi,
-                            dogum_tarihi: r.dogum_tarihi,
-                            sasi: r.sasi,
-                            belge_no: r.belge_no,
-                            arac_cinsi: r.arac_cinsi,
-                            brut_prim: r.brut_prim,
-                            net_prim: r.net_prim,
-                            komisyon: r.komisyon,
-                            tur: r.tur,
-                            kesen: r.kesen,
-                            ilgili_kisi: r.ilgili_kisi,
-                            acente: r.acente,
-                            kart: r.kart,
-                            ek_bilgiler_iletisim: r.ek_bilgiler_iletisim,
-                            durum: r.durum,
-                            employee_id: user.id,
-                            updated_at: new Date().toISOString()
-                        });
-                  }
-              });
+                const getVal = (header: string) => row[headerMap[header]];
+                
+                const policeNo = cleanString(getVal('POLİÇE NO'));
+                // Skip if no policy number (crucial identifier)
+                if (!policeNo) continue;
 
-              const dbRows = Array.from(uniqueBatchMap.values());
-              
-              if (dbRows.length > 0) {
-                  const { error } = await supabase.from('policeler').upsert(dbRows, { onConflict: 'police_no' });
-                  if (error) throw error;
-              }
-              
-              await new Promise(resolve => setTimeout(resolve, 50));
-              
-              setProgress(Math.round(((i + 1) / chunks) * 100));
-          }
-          
-          onSuccess();
-          onClose();
-          
-      } catch (err: any) {
-          console.error(err);
-          alert("Import Hatası: " + err.message);
-          onClose();
-      }
+                const tur = cleanString(getVal('TÜR'));
+                const bitisDateObj = parseDateObj(getVal('TARİH'));
+                const dogumDateObj = parseDateObj(getVal('DOĞUM TARİHİ'));
+
+                // --- 2. Tanzim Tarihi Calculation Logic ---
+                // If TÜR contains 'İPTAL', tanzim_tarihi = TARİH (End Date)
+                // Else, tanzim_tarihi = TARİH - 1 Year
+                let tanzimDateObj: Date | null = null;
+                const isIptal = tur.toLocaleLowerCase('tr-TR').includes('iptal');
+
+                if (bitisDateObj) {
+                    if (isIptal) {
+                        tanzimDateObj = new Date(bitisDateObj);
+                    } else {
+                        tanzimDateObj = new Date(bitisDateObj);
+                        tanzimDateObj.setFullYear(tanzimDateObj.getFullYear() - 1);
+                    }
+                }
+
+                // --- 3. Status Logic ---
+                const durum = isIptal ? 'İPTAL' : 'POLİÇE';
+
+                // Prepare DB Object
+                // Overwrite if exists (last one wins)
+                uniqueRowsMap.set(policeNo, {
+                    ad_soyad: cleanString(getVal('AD SOYAD')),
+                    dogum_tarihi: toISO(dogumDateObj),
+                    sirket: cleanString(getVal('ŞİRKET')),
+                    tarih: toISO(bitisDateObj), // This is the End Date (Bitiş Tarihi)
+                    tanzim_tarihi: toISO(tanzimDateObj), // Calculated Start Date
+                    sasi: cleanString(getVal('ŞASİ')),
+                    plaka: cleanString(getVal('PLAKA')),
+                    tc_vkn: cleanString(getVal('TC/VKN')),
+                    belge_no: cleanString(getVal('BELGE NO')),
+                    arac_cinsi: cleanString(getVal('ARAÇ CİNSİ')),
+                    brut_prim: parseNumber(getVal('BRÜT PRİM')),
+                    tur: tur,
+                    durum: durum, // Calculated Status
+                    kesen: cleanString(getVal('KESEN')),
+                    ilgili_kisi: cleanString(getVal('İLGİLİ KİŞİ')),
+                    police_no: policeNo,
+                    acente: cleanString(getVal('ACENTE')),
+                    kart: cleanString(getVal('KART')),
+                    ek_bilgiler_iletisim: cleanString(getVal('EK BİLGİLER / İLETİŞİM')),
+                    net_prim: parseNumber(getVal('NET PRİM')),
+                    komisyon: parseNumber(getVal('KOMİSYON')),
+                    // System Fields
+                    employee_id: user?.id,
+                    updated_at: new Date().toISOString()
+                });
+            }
+
+            const dbRows = Array.from(uniqueRowsMap.values());
+
+            if (dbRows.length > 0) {
+                // Upsert to Supabase
+                const { error } = await supabase
+                    .from('policeler')
+                    .upsert(dbRows, { onConflict: 'police_no' });
+
+                if (error) {
+                    throw new Error(`Veritabanı hatası (Satır ${i + 1}-${i + chunk.length}): ${error.message}`);
+                }
+            }
+
+            processedCount += chunk.length;
+            const progressPercent = Math.min(100, Math.round((processedCount / totalRows) * 100));
+            setProgress(progressPercent);
+            setStatusMessage(`${processedCount} / ${totalRows} satır işlendi...`);
+            
+            // Small delay to allow UI updates and prevent freezing
+            await new Promise(resolve => setTimeout(resolve, 50));
+        }
+
+        setStep('success');
+        setStatusMessage("Tüm kayıtlar başarıyla yüklendi!");
+        setTimeout(() => {
+            onSuccess();
+            onClose();
+        }, 2000);
+
+    } catch (err: any) {
+        console.error(err);
+        setStep('error');
+        setErrorDetails([err.message || "Bilinmeyen bir hata oluştu."]);
+    }
   };
 
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center backdrop-blur-sm">
-      <div className="bg-white rounded-xl shadow-2xl w-[600px] flex flex-col overflow-hidden">
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center backdrop-blur-sm">
+      <div className="bg-white rounded-xl shadow-2xl w-[600px] max-h-[90vh] flex flex-col overflow-hidden">
+        
+        {/* Header */}
         <div className="px-6 py-4 border-b flex justify-between items-center bg-gray-50">
           <h3 className="font-bold text-xl text-gray-800 flex items-center gap-2">
             <FileSpreadsheet className="text-blue-600" />
-            Toplu Poliçe Yükleme Sihirbazı
+            Toplu Poliçe Yükleme
           </h3>
           <button onClick={onClose} className="p-2 hover:bg-gray-200 rounded-full text-gray-500"><X size={20}/></button>
         </div>
 
-        <div className="p-8 bg-gray-50/30 flex flex-col items-center">
-          {step === 'upload' && (
-             <div 
-               className="w-full h-64 border-2 border-dashed border-gray-300 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:border-blue-500 hover:bg-blue-50/50 transition-all gap-4 bg-white"
-               onClick={() => fileInputRef.current?.click()}
-             >
-               <Upload size={48} className="text-blue-600" />
-               <div className="text-center">
-                 <h4 className="text-xl font-semibold text-gray-800">Excel Dosyası Seçin</h4>
-                 <p className="text-gray-500">Otomatik analiz ve yükleme başlatılacak.</p>
-               </div>
-               <input ref={fileInputRef} type="file" accept=".xlsx,.csv" className="hidden" onChange={handleFileUpload} />
-               {debugInfo && (
-                   <div className="mt-4 p-4 bg-red-50 text-red-700 text-xs font-mono whitespace-pre-wrap max-w-lg border border-red-200 rounded text-left">
-                       {debugInfo}
-                   </div>
-               )}
-             </div>
-          )}
+        {/* Content */}
+        <div className="p-8 flex flex-col items-center justify-center flex-1 overflow-y-auto">
+            
+            {/* STEP: UPLOAD */}
+            {step === 'upload' && (
+                <div 
+                    className="w-full h-64 border-2 border-dashed border-gray-300 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:border-blue-500 hover:bg-blue-50/50 transition-all gap-4 bg-white group"
+                    onClick={() => fileInputRef.current?.click()}
+                >
+                    <div className="p-4 rounded-full bg-blue-50 text-blue-600 group-hover:scale-110 transition-transform">
+                        <Upload size={40} />
+                    </div>
+                    <div className="text-center">
+                        <h4 className="text-lg font-bold text-gray-800">Excel Dosyası Seçin</h4>
+                        <p className="text-sm text-gray-500 mt-1">.xlsx veya .csv formatında</p>
+                    </div>
+                    <input ref={fileInputRef} type="file" accept=".xlsx,.csv" className="hidden" onChange={handleFileUpload} />
+                    
+                    <div className="text-xs text-gray-400 mt-4 max-w-sm text-center">
+                        * Dosya başlıkları zorunlu formatta olmalıdır.
+                    </div>
+                </div>
+            )}
 
-          {(step === 'analyzing' || step === 'importing') && (
-              <div className="w-full flex flex-col items-center justify-center gap-6 bg-white rounded-2xl border border-gray-100 p-8">
-                  <div className="w-32 h-32 relative">
-                      <div className="absolute inset-0 border-4 border-gray-100 rounded-full"></div>
-                      <div className="absolute inset-0 border-4 border-blue-600 rounded-full border-t-transparent animate-spin"></div>
-                      <div className="absolute inset-0 flex items-center justify-center font-bold text-xl text-blue-600">
-                          {step === 'analyzing' ? analyzeProgress : Math.round(progress)}%
-                      </div>
-                  </div>
-                  <div className="text-center">
-                      <h4 className="font-semibold text-lg">{step === 'analyzing' ? 'Dosya Analiz Ediliyor...' : 'Veritabanına Yazılıyor...'}</h4>
-                      <p className="text-gray-500">Lütfen bekleyiniz, pencereyi kapatmayınız.</p>
-                  </div>
-              </div>
-          )}
+            {/* STEP: PROCESSING */}
+            {(step === 'analyzing' || step === 'importing') && (
+                <div className="w-full text-center space-y-6">
+                    <div className="relative w-32 h-32 mx-auto">
+                        <svg className="w-full h-full" viewBox="0 0 100 100">
+                            <circle className="text-gray-200 stroke-current" strokeWidth="8" cx="50" cy="50" r="40" fill="transparent"></circle>
+                            <circle className="text-blue-600 progress-ring__circle stroke-current transition-all duration-300" strokeWidth="8" strokeLinecap="round" cx="50" cy="50" r="40" fill="transparent" strokeDasharray="251.2" strokeDashoffset={251.2 - (251.2 * progress) / 100} transform="rotate(-90 50 50)"></circle>
+                        </svg>
+                        <div className="absolute inset-0 flex items-center justify-center flex-col">
+                            <span className="text-2xl font-bold text-blue-600">{progress}%</span>
+                        </div>
+                    </div>
+                    <div>
+                        <h4 className="text-lg font-bold text-gray-800 flex items-center justify-center gap-2">
+                            <Loader2 className="animate-spin" size={20} />
+                            {step === 'analyzing' ? 'Dosya Analiz Ediliyor...' : 'Veriler Yükleniyor...'}
+                        </h4>
+                        <p className="text-gray-500 mt-2 font-mono text-sm">{statusMessage}</p>
+                    </div>
+                </div>
+            )}
+
+            {/* STEP: SUCCESS */}
+            {step === 'success' && (
+                <div className="text-center space-y-4">
+                    <div className="w-20 h-20 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto mb-4">
+                        <CheckCircle size={48} />
+                    </div>
+                    <h4 className="text-2xl font-bold text-gray-800">İşlem Başarılı!</h4>
+                    <p className="text-gray-500">Tüm veriler güvenli bir şekilde veritabanına aktarıldı.</p>
+                </div>
+            )}
+
+            {/* STEP: ERROR */}
+            {step === 'error' && (
+                <div className="w-full space-y-4">
+                    <div className="flex items-center gap-3 text-red-600 bg-red-50 p-4 rounded-lg border border-red-100">
+                        <AlertTriangle size={24} className="flex-shrink-0" />
+                        <h4 className="font-bold">Yükleme Başarısız</h4>
+                    </div>
+                    
+                    <div className="bg-gray-50 p-4 rounded-lg border border-gray-200 text-sm font-mono text-gray-700 max-h-60 overflow-y-auto">
+                        {errorDetails.map((err, idx) => (
+                            <div key={idx} className="mb-2 last:mb-0 border-b last:border-0 border-gray-200 pb-2 last:pb-0">
+                                {err}
+                            </div>
+                        ))}
+                    </div>
+
+                    <button 
+                        onClick={() => setStep('upload')}
+                        className="w-full py-3 bg-gray-900 text-white rounded-lg font-bold hover:bg-gray-800 transition-colors"
+                    >
+                        Tekrar Dene
+                    </button>
+                </div>
+            )}
+
         </div>
       </div>
     </div>

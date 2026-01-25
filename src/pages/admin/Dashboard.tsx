@@ -107,19 +107,16 @@ export default function AdminDashboard() {
     let channel: any;
     
     if (selectedYear === currentYear) {
-        channel = supabase.channel('dashboard-v3-live')
+        // Listen to BOTH policeler (source of truth) and dashboard_stats
+        channel = supabase.channel('dashboard-live-updates')
           .on('postgres_changes', { 
-            event: 'UPDATE', 
+            event: '*', 
             schema: 'public', 
-            table: 'dashboard_stats', 
-            filter: `type=eq.admin` // We will filter by period_date in fetch logic mostly
+            table: 'policeler' 
           }, 
-            (payload) => {
-                 // Check if the update is for the current year snapshot
-                 const updatedData = payload.new;
-                 if (updatedData && updatedData.period === 'year_snapshot' && new Date(updatedData.period_date).getFullYear() === selectedYear) {
-                     setStats(updatedData.data);
-                 }
+            () => {
+                 // When policeler changes, force refresh stats via RPC then re-fetch
+                 fetchDashboardData(selectedYear);
             }
           )
           .subscribe();
@@ -158,7 +155,20 @@ export default function AdminDashboard() {
          if (retry.data) setStats(retry.data.data);
          else setStats(null); // Should not happen
       } else if (data) {
-        setStats(data.data);
+          // Check if data is stale (older than 1 minute) for current year
+          // or force refresh if explicitly requested (e.g. from realtime event)
+          await supabase.rpc('refresh_admin_stats', { target_year: year });
+          
+          // Re-fetch fresh data
+          const fresh = await supabase
+            .from('dashboard_stats')
+            .select('data')
+            .eq('type', 'admin')
+            .eq('period', 'year_snapshot')
+            .eq('period_date', yearStartDate)
+            .single();
+            
+          if (fresh.data) setStats(fresh.data.data);
       }
     } catch (err) { console.error(err); } finally { setLoading(false); }
   }
@@ -297,8 +307,8 @@ export default function AdminDashboard() {
                       return enToTr[label] || label;
                   }}
                 />
-                <Area yAxisId="left" type="monotone" dataKey="amount" stroke="#3b82f6" strokeWidth={3} fillOpacity={1} fill="url(#colorPremium)" />
-                <Area yAxisId="right" type="monotone" dataKey="count" stroke="#f59e0b" strokeWidth={2} fill="none" />
+                <Area yAxisId="left" type="monotone" dataKey="amount" stroke="#3b82f6" strokeWidth={3} fillOpacity={1} fill="url(#colorPremium)" isAnimationActive={false} connectNulls={false} />
+                <Area yAxisId="right" type="monotone" dataKey="count" stroke="#f59e0b" strokeWidth={2} fill="none" isAnimationActive={false} connectNulls={false} />
               </AreaChart>
             </ResponsiveContainer>
           </div>
@@ -470,7 +480,7 @@ export default function AdminDashboard() {
                       return enToTr[label] || label;
                   }}
                 />
-                <Area type="monotone" dataKey="commission" stroke="#10b981" strokeWidth={3} fillOpacity={1} fill="url(#colorCommission)" />
+                <Area type="monotone" dataKey="commission" stroke="#10b981" strokeWidth={3} fillOpacity={1} fill="url(#colorCommission)" isAnimationActive={false} connectNulls={false} />
               </AreaChart>
             </ResponsiveContainer>
           </div>

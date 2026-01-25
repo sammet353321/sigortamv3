@@ -16,6 +16,7 @@ export default function EmployeePoliciesPage() {
   const [filterType, setFilterType] = useState<string>('all');
   const [uniqueTypes, setUniqueTypes] = useState<string[]>([]);
   const [selectedMonth, setSelectedMonth] = useState<number>(new Date().getMonth()); // 0-11, 12 => Tümü
+  const [showCancelled, setShowCancelled] = useState(true);
   
   // Action Modals State
   const [selectedPolicy, setSelectedPolicy] = useState<any>(null);
@@ -242,7 +243,8 @@ export default function EmployeePoliciesPage() {
       (policy.police_no?.toLowerCase().includes(searchLower) || '')
     );
     const matchesType = filterType === 'all' || policy.tur === filterType;
-    return matchesSearch && matchesType;
+    const matchesCancelled = showCancelled || (policy.durum?.toLowerCase() !== 'iptal' && !policy.tur?.toLowerCase().includes('iptal'));
+    return matchesSearch && matchesType && matchesCancelled;
   });
 
   const downloadExcel = () => {
@@ -424,6 +426,19 @@ export default function EmployeePoliciesPage() {
               ))}
               <option value={12}>Tümü</option>
             </select>
+          </div>
+
+          <div className="flex items-center gap-2 bg-white px-3 py-2 rounded-lg border border-gray-300 h-[42px]">
+            <input 
+              type="checkbox" 
+              id="showCancelled"
+              checked={showCancelled}
+              onChange={(e) => setShowCancelled(e.target.checked)}
+              className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500 cursor-pointer"
+            />
+            <label htmlFor="showCancelled" className="text-sm text-gray-700 select-none cursor-pointer font-medium">
+              İptalleri Göster
+            </label>
           </div>
 
           <div className="relative">
