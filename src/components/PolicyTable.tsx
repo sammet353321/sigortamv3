@@ -5,6 +5,7 @@ import { Search, Calendar, FileSpreadsheet, ArrowUpDown, ArrowUp, ArrowDown, Loa
 import PolicyImportModal from './PolicyImportModal';
 import { useDebounce } from '../hooks/useDebounce';
 import * as XLSX from 'xlsx';
+import { useVirtualizer } from '@tanstack/react-virtual';
 
 interface Policy {
   id: number;
@@ -33,8 +34,8 @@ interface Policy {
 interface Column {
   id: keyof Policy | string;
   header: string;
-  width?: string; // Tailwind width class or pixel value
-  minWidth?: string;
+  width?: string;
+  minWidth?: number; // Changed to number for simpler calculation if needed, but string works too with style
   sortable?: boolean;
 }
 
@@ -44,24 +45,20 @@ export default function PolicyTable() {
   const [loading, setLoading] = useState(true);
   const [totalCount, setTotalCount] = useState(0);
   const [searchTerm, setSearchTerm] = useState("");
-  const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1); // Default current month
+  const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1);
   const [showCancelled, setShowCancelled] = useState(true);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   
-  // Sort State - Default Ascending by Date
+  // Sort State
   const [sort, setSort] = useState<{ id: string, dir: "asc" | "desc" } | null>({ id: 'tarih', dir: 'asc' });
   
-  // Debounce search
   const debouncedSearch = useDebounce(searchTerm, 500);
-
-  // Scroll Container Ref
   const tableContainerRef = useRef<HTMLDivElement>(null);
 
   // Formatters
   const formatCurrency = (val: any) => {
     const num = Number(val);
     if (isNaN(num)) return '0,00 ₺';
-    // Custom format: 7999,95 instead of 7.999,95
     return new Intl.NumberFormat('tr-TR', { 
         style: 'decimal', 
         minimumFractionDigits: 2, 
@@ -85,23 +82,22 @@ export default function PolicyTable() {
   const exportToExcel = async () => {
     try {
         setLoading(true);
-        // Fetch ALL data for export matching current filters
         let query = supabase.from('policeler').select('*');
 
-        // Month Filter
         if (selectedMonth !== 0) {
             const year = new Date().getFullYear();
-            const startStr = new Date(year, selectedMonth - 1, 1).toISOString().split('T')[0];
-            const endStr = new Date(year, selectedMonth, 1).toISOString().split('T')[0];
+            const startStr = `${year}-${String(selectedMonth).padStart(2, '0')}-01`;
+            let endYear = year;
+            let endMonth = selectedMonth + 1;
+            if (endMonth > 12) { endMonth = 1; endYear = year + 1; }
+            const endStr = `${endYear}-${String(endMonth).padStart(2, '0')}-01`;
             query = query.gte('tarih', startStr).lt('tarih', endStr);
         }
 
-        // Text Search
         if (debouncedSearch) {
             query = query.or(`plaka.ilike.%${debouncedSearch}%,tc_vkn.ilike.%${debouncedSearch}%,ad_soyad.ilike.%${debouncedSearch}%,police_no.ilike.%${debouncedSearch}%`);
         }
 
-        // Sort
         if (sort) {
             query = query.order(sort.id, { ascending: sort.dir === 'asc' });
         } else {
@@ -147,7 +143,7 @@ export default function PolicyTable() {
     }
   };
 
-  // Data Fetching Logic
+  // Data Fetching Logic (Optimized with Batch Fetching)
   const fetchPolicies = async (currentSort = sort, search = debouncedSearch) => {
     setLoading(true);
     setData([]); 
@@ -155,71 +151,50 @@ export default function PolicyTable() {
     try {
       let query = supabase.from('policeler').select('*', { count: 'exact', head: false });
 
-      // Month Filter (Full Month Coverage Fix - Timezone Safe)
       if (selectedMonth !== 0) {
             const year = new Date().getFullYear();
             const startStr = `${year}-${String(selectedMonth).padStart(2, '0')}-01`;
-            
             let endYear = year;
             let endMonth = selectedMonth + 1;
-            if (endMonth > 12) {
-                endMonth = 1;
-                endYear = year + 1;
-            }
+            if (endMonth > 12) { endMonth = 1; endYear = year + 1; }
             const endStr = `${endYear}-${String(endMonth).padStart(2, '0')}-01`;
-            
             query = query.gte('tarih', startStr).lt('tarih', endStr);
       }
 
-      // Cancelled Filter
       if (!showCancelled) {
           query = query.not('durum', 'ilike', '%iptal%');
       }
 
-      // Text Search
       if (search) {
         query = query.or(`plaka.ilike.%${search}%,tc_vkn.ilike.%${search}%,ad_soyad.ilike.%${search}%,police_no.ilike.%${search}%`);
       }
 
-      // Apply Sort
       if (currentSort) {
         query = query.order(currentSort.id, { ascending: currentSort.dir === 'asc' });
       } else {
         query = query.order('tarih', { ascending: true });
       }
       
-      // Batch Fetching to bypass 1000 row limit
       const pageSize = 1000;
       let allData: any[] = [];
       let page = 0;
       let hasMore = true;
 
       while (hasMore) {
-          // Clone the query to avoid modifying the original query builder state incorrectly if it mutates
-          // Supabase query builders are immutable until executed, but let's be safe by re-applying range
           const { data: batchData, error } = await query.range(page * pageSize, (page + 1) * pageSize - 1);
-          
           if (error) throw error;
           
           if (batchData && batchData.length > 0) {
               allData = [...allData, ...batchData];
-              if (batchData.length < pageSize) {
-                  hasMore = false;
-              }
+              if (batchData.length < pageSize) hasMore = false;
           } else {
               hasMore = false;
           }
           page++;
-          
-          // Safety break to prevent infinite loops in case of weird API behavior
-          if (page > 100) hasMore = false; // Max 100,000 rows
+          if (page > 100) hasMore = false; 
       }
       
       setData(allData);
-      
-      // Reset scroll position when filter changes
-      if (tableContainerRef.current) tableContainerRef.current.scrollTop = 0;
-
       setTotalCount(allData.length);
     } catch (error) {
       console.error('Error fetching policies:', error);
@@ -232,15 +207,6 @@ export default function PolicyTable() {
     fetchPolicies(sort, debouncedSearch);
   }, [sort, selectedMonth, debouncedSearch, showCancelled]);
 
-  const handleScroll = () => {
-      // Infinite scroll disabled as per request
-      // if (!tableContainerRef.current) return;
-      // const { scrollTop, scrollHeight, clientHeight } = tableContainerRef.current;
-      // if (scrollHeight - scrollTop - clientHeight < 100 && !loading && !loadingMore && data.length < totalCount) {
-      //    fetchPolicies(data.length, sort, debouncedSearch, true);
-      // }
-  };
-
   const handleSort = (columnId: string) => {
       if (sort?.id === columnId) {
           if (sort.dir === 'asc') setSort({ id: columnId, dir: 'desc' });
@@ -251,26 +217,26 @@ export default function PolicyTable() {
   };
 
   const columns: Column[] = [
-    { id: "ad_soyad", header: "AD SOYAD", minWidth: "200px", sortable: true },
-    { id: "dogum_tarihi", header: "DOĞUM TARİHİ", minWidth: "120px", sortable: true },
-    { id: "sirket", header: "ŞİRKET", minWidth: "150px", sortable: true },
-    { id: "tarih", header: "TARİH", minWidth: "120px", sortable: true },
-    { id: "sasi", header: "ŞASİ", minWidth: "180px", sortable: true },
-    { id: "plaka", header: "PLAKA", minWidth: "120px", sortable: true },
-    { id: "tc_vkn", header: "TC/VKN", minWidth: "140px", sortable: true },
-    { id: "belge_no", header: "BELGE NO", minWidth: "140px", sortable: true },
-    { id: "arac_cinsi", header: "ARAÇ CİNSİ", minWidth: "160px", sortable: true },
-    { id: "brut_prim", header: "BRÜT PRİM", minWidth: "140px", sortable: true },
-    { id: "tur", header: "TÜR", minWidth: "140px", sortable: true },
-    { id: "kesen", header: "KESEN", minWidth: "160px", sortable: true },
-    { id: "ilgili_kisi", header: "İLGİLİ KİŞİ", minWidth: "160px", sortable: true },
-    { id: "police_no", header: "POLİÇE NO", minWidth: "160px", sortable: true },
-    { id: "acente", header: "ACENTE", minWidth: "160px", sortable: true },
-    { id: "kart", header: "KART", minWidth: "160px", sortable: true },
-    { id: "ek_bilgiler_iletisim", header: "EK BİLGİLER", minWidth: "250px", sortable: true },
-    { id: "net_prim", header: "NET PRİM", minWidth: "140px", sortable: true },
-    { id: "komisyon", header: "KOMİSYON", minWidth: "140px", sortable: true },
-    { id: "durum", header: "DURUM", minWidth: "120px", sortable: true },
+    { id: "ad_soyad", header: "AD SOYAD", minWidth: 200, sortable: true },
+    { id: "dogum_tarihi", header: "DOĞUM TARİHİ", minWidth: 120, sortable: true },
+    { id: "sirket", header: "ŞİRKET", minWidth: 150, sortable: true },
+    { id: "tarih", header: "TARİH", minWidth: 120, sortable: true },
+    { id: "sasi", header: "ŞASİ", minWidth: 180, sortable: true },
+    { id: "plaka", header: "PLAKA", minWidth: 120, sortable: true },
+    { id: "tc_vkn", header: "TC/VKN", minWidth: 140, sortable: true },
+    { id: "belge_no", header: "BELGE NO", minWidth: 140, sortable: true },
+    { id: "arac_cinsi", header: "ARAÇ CİNSİ", minWidth: 160, sortable: true },
+    { id: "brut_prim", header: "BRÜT PRİM", minWidth: 140, sortable: true },
+    { id: "tur", header: "TÜR", minWidth: 140, sortable: true },
+    { id: "kesen", header: "KESEN", minWidth: 160, sortable: true },
+    { id: "ilgili_kisi", header: "İLGİLİ KİŞİ", minWidth: 160, sortable: true },
+    { id: "police_no", header: "POLİÇE NO", minWidth: 160, sortable: true },
+    { id: "acente", header: "ACENTE", minWidth: 160, sortable: true },
+    { id: "kart", header: "KART", minWidth: 160, sortable: true },
+    { id: "ek_bilgiler_iletisim", header: "EK BİLGİLER", minWidth: 250, sortable: true },
+    { id: "net_prim", header: "NET PRİM", minWidth: 140, sortable: true },
+    { id: "komisyon", header: "KOMİSYON", minWidth: 140, sortable: true },
+    { id: "durum", header: "DURUM", minWidth: 120, sortable: true },
   ];
 
   const renderCell = (policy: Policy, colId: string) => {
@@ -288,6 +254,14 @@ export default function PolicyTable() {
               return (policy as any)[colId] || '-';
       }
   };
+
+  // Virtualizer
+  const rowVirtualizer = useVirtualizer({
+    count: data.length,
+    getScrollElement: () => tableContainerRef.current,
+    estimateSize: () => 48, // Row height
+    overscan: 20, // Buffer rows
+  });
 
   return (
     <div className="flex flex-col h-full bg-gray-50/50">
@@ -360,7 +334,7 @@ export default function PolicyTable() {
         </div>
       </div>
 
-      {/* Standard HTML Table Container */}
+      {/* Virtualized Table Container */}
       <div 
         ref={tableContainerRef}
         className="flex-1 overflow-auto bg-white border rounded-lg m-4 shadow-sm relative"
@@ -374,64 +348,76 @@ export default function PolicyTable() {
             </div>
           )}
 
-          <table className="w-full text-left border-collapse">
-              <thead className="bg-gray-50 sticky top-0 z-30 shadow-sm">
-                  <tr>
-                      {columns.map((col, index) => (
-                          <th 
-                              key={col.id} 
-                              className={`
-                                p-3 text-xs font-semibold text-gray-600 uppercase tracking-wider border-b border-gray-200 bg-gray-50
-                                ${col.sortable ? 'cursor-pointer hover:bg-gray-100 transition-colors' : ''}
-                              `}
-                              style={{ minWidth: col.minWidth }}
-                              onClick={() => col.sortable && handleSort(col.id as string)}
-                          >
-                              <div className="flex items-center gap-2">
-                                  {col.header}
-                                  {sort?.id === col.id && (
-                                      sort.dir === 'asc' ? <ArrowUp size={14} className="text-blue-600" /> : <ArrowDown size={14} className="text-blue-600" />
-                                  )}
-                                  {col.sortable && sort?.id !== col.id && (
-                                      <ArrowUpDown size={14} className="text-gray-300 opacity-0 group-hover:opacity-100" />
-                                  )}
-                              </div>
-                          </th>
-                      ))}
-                  </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                  {data.map((policy, rowIndex) => (
-                      <tr 
-                        key={`${policy.id}-${rowIndex}`} 
+          <div className="w-full relative" style={{ minWidth: 'fit-content' }}>
+            {/* Sticky Header */}
+            <div className="sticky top-0 z-30 bg-gray-50 border-b border-gray-200 flex min-w-max">
+                {columns.map((col) => (
+                    <div
+                        key={col.id}
                         className={`
-                            transition-colors group
-                            ${policy.durum === 'İPTAL' ? 'bg-red-50 hover:bg-red-100' : 'hover:bg-blue-50/50'}
+                            p-3 text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50
+                            ${col.sortable ? 'cursor-pointer hover:bg-gray-100 transition-colors' : ''}
                         `}
-                      >
-                          {columns.map((col, colIndex) => (
-                              <td 
-                                  key={`${policy.id}-${col.id}`} 
-                                  className={`
-                                    p-3 text-sm border-b border-gray-100 
-                                    ${policy.durum === 'İPTAL' ? 'text-red-900 border-red-100' : 'text-gray-700 group-hover:bg-blue-50/50'}
-                                  `}
-                              >
-                                  <div className="truncate" style={{ maxWidth: col.minWidth }}>
-                                      {renderCell(policy, col.id as string)}
-                                  </div>
-                              </td>
-                          ))}
-                      </tr>
-                  ))}
-              </tbody>
-          </table>
-          
-          {!loading && data.length === 0 && (
-              <div className="p-12 text-center text-gray-500">
-                  Kayıt bulunamadı.
-              </div>
-          )}
+                        style={{ width: col.minWidth, flexShrink: 0 }}
+                        onClick={() => col.sortable && handleSort(col.id as string)}
+                    >
+                        <div className="flex items-center gap-2">
+                            {col.header}
+                            {sort?.id === col.id && (
+                                sort.dir === 'asc' ? <ArrowUp size={14} className="text-blue-600" /> : <ArrowDown size={14} className="text-blue-600" />
+                            )}
+                            {col.sortable && sort?.id !== col.id && (
+                                <ArrowUpDown size={14} className="text-gray-300 opacity-0 group-hover:opacity-100" />
+                            )}
+                        </div>
+                    </div>
+                ))}
+            </div>
+
+            {/* Virtual Body */}
+            <div 
+                className="relative w-full min-w-max"
+                style={{ height: `${rowVirtualizer.getTotalSize()}px` }}
+            >
+                {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+                    const policy = data[virtualRow.index];
+                    return (
+                        <div
+                            key={virtualRow.key}
+                            className={`
+                                absolute top-0 left-0 w-full flex border-b border-gray-100 transition-colors
+                                ${policy.durum === 'İPTAL' ? 'bg-red-50 hover:bg-red-100' : 'hover:bg-blue-50/50'}
+                            `}
+                            style={{
+                                height: `${virtualRow.size}px`,
+                                transform: `translateY(${virtualRow.start}px)`,
+                            }}
+                        >
+                            {columns.map((col) => (
+                                <div
+                                    key={`${policy.id}-${col.id}`}
+                                    className={`
+                                        p-3 text-sm flex items-center
+                                        ${policy.durum === 'İPTAL' ? 'text-red-900' : 'text-gray-700'}
+                                    `}
+                                    style={{ width: col.minWidth, flexShrink: 0 }}
+                                >
+                                    <div className="truncate w-full">
+                                        {renderCell(policy, col.id as string)}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    );
+                })}
+            </div>
+            
+            {!loading && data.length === 0 && (
+                <div className="p-12 text-center text-gray-500 absolute top-12 left-0 w-full">
+                    Kayıt bulunamadı.
+                </div>
+            )}
+          </div>
       </div>
       
       {/* Footer Status */}
@@ -444,7 +430,7 @@ export default function PolicyTable() {
         isOpen={isImportModalOpen} 
         onClose={() => setIsImportModalOpen(false)} 
         onSuccess={() => {
-            fetchPolicies(0, sort, debouncedSearch);
+            fetchPolicies(sort, debouncedSearch);
         }}
       />
     </div>

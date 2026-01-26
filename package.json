@@ -17,6 +17,7 @@
     "electron:build": "npm run build && electron-builder"
   },
   "dependencies": {
+    "@tanstack/react-virtual": "^3.13.18",
     "electron-squirrel-startup": "^1.0.1",
     "electron-updater": "^6.7.3",
     "recharts": "^3.7.0"
