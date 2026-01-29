@@ -1,191 +1,253 @@
-import { useEffect, useState } from 'react';
-import { 
-  Clock, 
-  FileText, 
-  TrendingUp, 
-  CreditCard,
-  PlusCircle,
-  FileCheck,
-  MessageCircle,
-  RefreshCw,
-  BarChart2,
-  AlertTriangle
-} from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
-import { startOfWeek, startOfMonth, startOfYear, format } from 'date-fns';
+import { FileText, Clock, AlertCircle, Plus, Calendar, TrendingUp, Users, DollarSign, Wallet, ArrowRight } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { format, startOfMonth, endOfMonth } from 'date-fns';
+import DateRangePicker, { DateRange } from '@/components/DateRangePicker';
 
-// Minimal optimized dashboard that reads from stats table
 export default function EmployeeDashboard() {
   const { user } = useAuth();
-  const navigate = useNavigate();
-  const [loading, setLoading] = useState(true);
-  
   const [stats, setStats] = useState({
-      today: { quotes: 0, policies: 0, premium: 0, commission: 0 },
-      month: { quotes: 0, policies: 0, premium: 0, commission: 0 },
-      year: { quotes: 0, policies: 0, premium: 0, commission: 0 },
-      pendingQuotes: 0,
-      expiringPolicies: 0
+    totalQuotes: 0,
+    activePolicies: 0,
+    expiringPolicies: 0,
+    totalCommission: 0,
+    monthlyCommission: 0,
+    totalPremium: 0
+  });
+  
+  // Date Filter State
+  const [dateRange, setDateRange] = useState<DateRange>({
+    from: startOfMonth(new Date()),
+    to: endOfMonth(new Date()),
+    label: 'Bu Ay'
   });
 
   useEffect(() => {
-    if (user) fetchStats();
-  }, [user]);
+    fetchStats();
+  }, [user, dateRange]);
 
   const fetchStats = async () => {
     if (!user) return;
-    
-    const today = new Date().toISOString().split('T')[0];
-    const monthStart = startOfMonth(new Date()).toISOString().split('T')[0];
-    const yearStart = startOfYear(new Date()).toISOString().split('T')[0];
 
-    // 1. Fetch Aggregated Stats (Fast)
-    // We fetch all records for this year to aggregate locally for month/year totals
-    // Since it's one row per day, 365 rows is tiny payload (few KB)
-    const { data: dailyStats, error } = await supabase
-        .from('employee_stats_daily')
-        .select('*')
-        .eq('employee_id', user.id)
-        .gte('date', yearStart);
+    try {
+      const startStr = dateRange.from.toISOString();
+      const endStr = dateRange.to.toISOString();
 
-    if (error) console.error('Stats fetch error:', error);
-
-    const newStats = {
-        today: { quotes: 0, policies: 0, premium: 0, commission: 0 },
-        month: { quotes: 0, policies: 0, premium: 0, commission: 0 },
-        year: { quotes: 0, policies: 0, premium: 0, commission: 0 },
-        pendingQuotes: 0,
-        expiringPolicies: 0
-    };
-
-    // Aggregate in memory (very fast for < 365 items)
-    dailyStats?.forEach(day => {
-        // Year totals
-        newStats.year.quotes += day.quotes_count || 0;
-        newStats.year.policies += day.policies_count || 0;
-        newStats.year.premium += day.total_premium || 0;
-        newStats.year.commission += day.total_commission || 0;
-
-        // Month totals
-        if (day.date >= monthStart) {
-            newStats.month.quotes += day.quotes_count || 0;
-            newStats.month.policies += day.policies_count || 0;
-            newStats.month.premium += day.total_premium || 0;
-            newStats.month.commission += day.total_commission || 0;
-        }
-
-        // Today totals
-        if (day.date === today) {
-            newStats.today.quotes += day.quotes_count || 0;
-            newStats.today.policies += day.policies_count || 0;
-            newStats.today.premium += day.total_premium || 0;
-            newStats.today.commission += day.total_commission || 0;
-        }
-    });
-
-    // 2. Fetch Pending Quotes Count (Live) - Still need live count for "Status"
-    // This is indexed and fast
-    const { count: pendingCount } = await supabase
+      // 1. Quotes (Teklifler) in range
+      let quotesQuery = supabase
         .from('teklifler')
-        .select('id', { count: 'exact', head: true })
-        .eq('kesen_id', user.id)
-        .eq('durum', 'bekliyor');
-    
-    newStats.pendingQuotes = pendingCount || 0;
+        .select('*', { count: 'exact', head: true })
+        .eq('kesen_id', user.id); // Fixed: kesen -> kesen_id
 
-    setStats(newStats);
-    setLoading(false);
+      // Apply date filter ONLY if dates are valid
+      if (startStr && endStr) {
+          quotesQuery = quotesQuery
+            .gte('tarih', startStr)
+            .lte('tarih', endStr);
+      }
+      
+      const { count: quotesCount, error: quotesError } = await quotesQuery;
+      
+      if (quotesError) {
+          console.error('Error fetching quotes stats:', quotesError);
+      }
+
+      const adjustedEndStr = new Date(dateRange.to.setHours(23, 59, 59, 999)).toISOString();
+
+      // Re-query with adjusted time
+      let quotesFinalQuery = supabase
+        .from('teklifler')
+        .select('*', { count: 'exact', head: true })
+        .eq('kesen_id', user.id); // Fixed: kesen -> kesen_id
+        
+      if (startStr && adjustedEndStr) {
+          quotesFinalQuery = quotesFinalQuery
+            .gte('tarih', startStr)
+            .lte('tarih', adjustedEndStr);
+      }
+
+      const { count: quotesCountFinal, error: quotesFinalError } = await quotesFinalQuery;
+      
+      if (quotesFinalError) {
+           console.error('Error fetching quotes stats final:', quotesFinalError);
+      }
+
+      // 2. Active Policies (Poliçeler) - Sales in range
+      let policiesQuery = supabase
+        .from('policeler')
+        .select('net_prim, komisyon')
+        .eq('kesen_id', user.id); // Fixed: kesen -> kesen_id
+
+      if (startStr && adjustedEndStr) {
+          policiesQuery = policiesQuery
+            .gte('tarih', startStr)
+            .lte('tarih', adjustedEndStr);
+      }
+
+      const { data: policiesData, error: policiesError } = await policiesQuery;
+      
+      if (policiesError) {
+           console.error('Error fetching policies stats:', policiesError);
+      }
+
+      const totalPrem = policiesData?.reduce((acc, curr) => acc + (curr.net_prim || 0), 0) || 0;
+      const totalComm = policiesData?.reduce((acc, curr) => acc + (curr.komisyon || 0), 0) || 0;
+
+      // 3. Expiring Soon (Always 14 days from now, unrelated to filter)
+      const { count: expiringCount, error: expiringError } = await supabase
+        .from('policeler')
+        .select('*', { count: 'exact', head: true })
+        .eq('kesen_id', user.id) // Fixed: kesen -> kesen_id
+        .gte('tarih', new Date().toISOString()) // Expiry check on 'tarih' (End Date)
+        .lte('tarih', new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString());
+        
+      if (expiringError) {
+           console.error('Error fetching expiring stats:', expiringError);
+      }
+
+      setStats({
+        totalQuotes: quotesCountFinal || 0,
+        activePolicies: policiesData?.length || 0,
+        expiringPolicies: expiringCount || 0,
+        totalCommission: totalComm,
+        monthlyCommission: 0, 
+        totalPremium: totalPrem
+      });
+
+    } catch (error) {
+      console.error('Error fetching dashboard stats:', error);
+    }
   };
 
-  const formatCurrency = (val: number) => 
-    new Intl.NumberFormat('tr-TR', { style: 'currency', currency: 'TRY', maximumFractionDigits: 0 }).format(val);
-
-  if (loading) return <div className="p-8 text-center text-gray-500">Yükleniyor...</div>;
-
   return (
-    <div className="p-6 space-y-8">
-      <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-bold text-gray-800">Hoş Geldin, {user?.name} 👋</h1>
-        <div className="text-sm text-gray-500 bg-gray-50 px-3 py-1 rounded-full border border-gray-200">
-             Bugün: {new Date().toLocaleDateString('tr-TR')}
+    <div className="space-y-6">
+      {/* Header & Date Filters */}
+      <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-800">Hoş Geldin, {user?.name} 👋</h1>
+          <p className="text-gray-500 text-sm">İşte performans özetin ve güncel durumun.</p>
+        </div>
+        
+        <div className="flex items-center gap-2">
+             <DateRangePicker 
+                dateRange={dateRange}
+                onChange={setDateRange}
+             />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        {/* Total Quotes */}
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition-shadow">
+          <div className="flex justify-between items-start">
+            <div>
+              <p className="text-gray-500 text-sm font-medium">Verilen Teklif</p>
+              <h3 className="text-3xl font-bold text-gray-800 mt-2">{stats.totalQuotes}</h3>
+            </div>
+            <div className="p-3 bg-blue-50 rounded-lg text-blue-600">
+              <FileText size={24} />
+            </div>
+          </div>
+          <div className="mt-4 flex items-center text-xs text-gray-400">
+             <span className="bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-medium mr-2">Seçili Dönem</span>
+          </div>
+        </div>
+
+        {/* Policies (Sales) */}
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition-shadow">
+          <div className="flex justify-between items-start">
+            <div>
+              <p className="text-gray-500 text-sm font-medium">Kesilen Poliçe</p>
+              <h3 className="text-3xl font-bold text-gray-800 mt-2">{stats.activePolicies}</h3>
+            </div>
+            <div className="p-3 bg-green-50 rounded-lg text-green-600">
+              <Users size={24} />
+            </div>
+          </div>
+          <div className="mt-4 flex items-center text-xs text-gray-400">
+             <span className="bg-green-100 text-green-700 px-1.5 py-0.5 rounded font-medium mr-2">Seçili Dönem</span>
+          </div>
+        </div>
+
+        {/* Total Premium */}
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition-shadow">
+          <div className="flex justify-between items-start">
+            <div>
+              <p className="text-gray-500 text-sm font-medium">Toplam Prim</p>
+              <h3 className="text-2xl font-bold text-gray-800 mt-2">
+                ₺{stats.totalPremium.toLocaleString('tr-TR', { maximumFractionDigits: 0 })}
+              </h3>
+            </div>
+            <div className="p-3 bg-purple-50 rounded-lg text-purple-600">
+              <Wallet size={24} />
+            </div>
+          </div>
+           <div className="mt-4 flex items-center text-xs text-gray-400">
+             <span className="bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded font-medium mr-2">Net Prim</span>
+          </div>
+        </div>
+        
+         {/* Commission (Earnings) */}
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition-shadow">
+          <div className="flex justify-between items-start">
+            <div>
+              <p className="text-gray-500 text-sm font-medium">Kazanç (Komisyon)</p>
+              <h3 className="text-2xl font-bold text-gray-800 mt-2">
+                 ₺{stats.totalCommission.toLocaleString('tr-TR', { maximumFractionDigits: 0 })}
+              </h3>
+            </div>
+            <div className="p-3 bg-amber-50 rounded-lg text-amber-600">
+              <DollarSign size={24} />
+            </div>
+          </div>
+           <div className="mt-4 flex items-center text-xs text-gray-400">
+             <span className="bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded font-medium mr-2">Tahmini</span>
+          </div>
         </div>
       </div>
       
-      {/* 1. Key Metrics Cards (Today & Month) */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          {/* Daily Sales */}
-          <div className="bg-white p-5 rounded-xl shadow-sm border border-blue-100 relative overflow-hidden group">
-              <div className="absolute top-0 right-0 p-3 opacity-10 group-hover:opacity-20 transition-opacity">
-                  <TrendingUp size={48} className="text-blue-600" />
-              </div>
-              <p className="text-xs text-gray-500 uppercase font-bold tracking-wider">Günlük Üretim</p>
-              <p className="text-2xl font-bold text-blue-600 mt-1">{formatCurrency(stats.today.premium)}</p>
-              <div className="mt-2 flex items-center text-xs text-green-600 font-medium">
-                  <span className="bg-green-50 px-1.5 py-0.5 rounded border border-green-100">
-                    +{formatCurrency(stats.today.commission)} Kom.
-                  </span>
-              </div>
+      {/* Action Banner & Expiring Soon */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-2 bg-gradient-to-r from-blue-600 to-indigo-700 rounded-xl p-6 text-white shadow-lg flex flex-col md:flex-row items-center justify-between relative overflow-hidden">
+             <div className="relative z-10">
+                 <h2 className="text-xl font-bold mb-2">Teklifler Sayfası</h2>
+                 <p className="text-blue-100 mb-6 max-w-md">Tekliflerinizi görüntülemek ve yönetmek için tıklayın.</p>
+                 <Link 
+                    to="/employee/quotes" 
+                    className="bg-white text-blue-600 hover:bg-blue-50 px-6 py-3 rounded-lg font-semibold inline-flex items-center gap-2 transition-colors shadow-sm"
+                 >
+                    <FileText size={20} />
+                    Teklifler
+                 </Link>
+             </div>
+             <div className="hidden md:block relative z-10 opacity-90">
+                <FileText size={100} className="text-white/20" />
+             </div>
+              {/* Abstract Circles */}
+             <div className="absolute top-0 right-0 -mt-10 -mr-10 w-40 h-40 bg-white/10 rounded-full blur-2xl"></div>
+             <div className="absolute bottom-0 left-0 -mb-10 -ml-10 w-40 h-40 bg-blue-400/20 rounded-full blur-2xl"></div>
           </div>
 
-          {/* Monthly Sales */}
-          <div className="bg-white p-5 rounded-xl shadow-sm border border-purple-100 relative overflow-hidden group">
-              <div className="absolute top-0 right-0 p-3 opacity-10 group-hover:opacity-20 transition-opacity">
-                  <CreditCard size={48} className="text-purple-600" />
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+              <div className="flex items-center justify-between mb-4">
+                  <h3 className="font-bold text-gray-800">Yaklaşan Yenilemeler</h3>
+                  <span className="bg-red-100 text-red-600 text-xs font-bold px-2 py-1 rounded-full">{stats.expiringPolicies}</span>
               </div>
-              <p className="text-xs text-gray-500 uppercase font-bold tracking-wider">Aylık Üretim</p>
-              <p className="text-2xl font-bold text-purple-600 mt-1">{formatCurrency(stats.month.premium)}</p>
-              <div className="mt-2 flex items-center text-xs text-purple-600 font-medium">
-                  <span>{stats.month.policies} Adet Poliçe</span>
-              </div>
-          </div>
-
-          {/* Active Quotes */}
-          <div className="bg-white p-5 rounded-xl shadow-sm border border-amber-100 relative overflow-hidden group">
-              <div className="absolute top-0 right-0 p-3 opacity-10 group-hover:opacity-20 transition-opacity">
-                  <FileText size={48} className="text-amber-600" />
-              </div>
-              <p className="text-xs text-gray-500 uppercase font-bold tracking-wider">Bekleyen Teklif</p>
-              <p className="text-2xl font-bold text-amber-600 mt-1">{stats.pendingQuotes}</p>
-              <div className="mt-2 flex items-center text-xs text-gray-400 font-medium">
-                  <span>Bugün {stats.today.quotes} yeni teklif</span>
-              </div>
-          </div>
-
-          {/* Year Total */}
-          <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100 relative overflow-hidden group">
-              <div className="absolute top-0 right-0 p-3 opacity-10 group-hover:opacity-20 transition-opacity">
-                  <BarChart2 size={48} className="text-gray-600" />
-              </div>
-              <p className="text-xs text-gray-500 uppercase font-bold tracking-wider">Yıllık Toplam</p>
-              <p className="text-2xl font-bold text-gray-700 mt-1">{formatCurrency(stats.year.premium)}</p>
-              <div className="mt-2 flex items-center text-xs text-gray-400 font-medium">
-                  <span>{stats.year.policies} Poliçe</span>
-              </div>
+              <p className="text-sm text-gray-500 mb-4">Önümüzdeki 14 gün içinde süresi dolacak poliçeler.</p>
+              
+              <Link to="/employee/renewals" className="block w-full">
+                <div className="flex items-center justify-between p-3 bg-red-50 hover:bg-red-100 rounded-lg border border-red-100 transition-colors group">
+                    <div className="flex items-center gap-3">
+                        <AlertCircle className="text-red-500" size={20} />
+                        <span className="font-medium text-red-700">Yenilemeleri Gör</span>
+                    </div>
+                    <ArrowRight size={18} className="text-red-400 group-hover:translate-x-1 transition-transform" />
+                </div>
+              </Link>
           </div>
       </div>
-
-      {/* 2. Quick Actions */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <button onClick={() => navigate('/employee/quotes/new')} className="p-4 bg-white border border-gray-200 hover:border-blue-300 hover:bg-blue-50 rounded-xl flex flex-col items-center gap-2 transition-all shadow-sm group">
-            <PlusCircle className="text-blue-500 group-hover:scale-110 transition-transform" />
-            <span className="text-sm font-bold text-gray-700 group-hover:text-blue-700">Yeni Teklif</span>
-        </button>
-        <button onClick={() => navigate('/employee/policies')} className="p-4 bg-white border border-gray-200 hover:border-green-300 hover:bg-green-50 rounded-xl flex flex-col items-center gap-2 transition-all shadow-sm group">
-            <FileCheck className="text-green-500 group-hover:scale-110 transition-transform" />
-            <span className="text-sm font-bold text-gray-700 group-hover:text-green-700">Poliçelerim</span>
-        </button>
-        <button onClick={() => navigate('/employee/messages')} className="p-4 bg-white border border-gray-200 hover:border-indigo-300 hover:bg-indigo-50 rounded-xl flex flex-col items-center gap-2 transition-all shadow-sm group">
-            <MessageCircle className="text-indigo-500 group-hover:scale-110 transition-transform" />
-            <span className="text-sm font-bold text-gray-700 group-hover:text-indigo-700">Mesajlar</span>
-        </button>
-        <button onClick={() => navigate('/employee/renewals')} className="p-4 bg-white border border-gray-200 hover:border-amber-300 hover:bg-amber-50 rounded-xl flex flex-col items-center gap-2 transition-all shadow-sm group">
-            <RefreshCw className="text-amber-500 group-hover:scale-110 transition-transform" />
-            <span className="text-sm font-bold text-gray-700 group-hover:text-amber-700">Yenilemeler</span>
-        </button>
-      </div>
-
     </div>
   );
 }

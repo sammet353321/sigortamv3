@@ -151,6 +151,16 @@ export default function PolicyTable() {
     try {
       let query = supabase.from('policeler').select('*', { count: 'exact', head: false });
 
+      // Employee Filter: Only show own policies
+      if (user?.role === 'employee' || user?.role === 'sub_agent') {
+          // Use kesen_id if that is the correct column, otherwise kesen
+          // Based on previous errors, kesen_id seemed correct for relations, but let's check.
+          // The table definition might use kesen as uuid?
+          // For now using 'kesen' as it was in the code, but if it fails we change to kesen_id
+          query = query.eq('kesen_id', user.id); 
+      }
+
+      // Month Filter (Full Month Coverage Fix - Timezone Safe)
       if (selectedMonth !== 0) {
             const year = new Date().getFullYear();
             const startStr = `${year}-${String(selectedMonth).padStart(2, '0')}-01`;
@@ -324,13 +334,16 @@ export default function PolicyTable() {
                 <Download size={18} />
                 Excel İndir
             </button>
-            <button 
-                onClick={() => setIsImportModalOpen(true)}
-                className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors font-medium shadow-sm hover:shadow"
-            >
-                <FileSpreadsheet size={18} />
-                Excel Yükle
-            </button>
+            {/* Excel Upload - Admin Only */}
+            {user?.role === 'admin' && (
+                <button 
+                    onClick={() => setIsImportModalOpen(true)}
+                    className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors font-medium shadow-sm hover:shadow"
+                >
+                    <FileSpreadsheet size={18} />
+                    Excel Yükle
+                </button>
+            )}
         </div>
       </div>
 

@@ -69,6 +69,11 @@ export default function EmployeeQuotesPage() {
         .select('*, ilgili_kisi:users!ilgili_kisi_id(name), kesen:users!kesen_id(name)')
         .order('guncellenme_tarihi', { ascending: false });
 
+      // Employee Filter
+      if (user?.role === 'employee' || user?.role === 'sub_agent') {
+          query = query.eq('kesen_id', user.id);
+      }
+
       if (selectedMonth !== 0) {
         const year = new Date().getFullYear();
         const startStr = `${year}-${String(selectedMonth).padStart(2, '0')}-01`;

@@ -18,22 +18,61 @@ export default function WhatsAppConnection() {
         return () => stopPolling();
     }, [user]);
 
-    // Polling Logic: Only poll if status is 'scanning' or 'connected'
+    // Polling Logic: More aggressive polling during scanning
     useEffect(() => {
         stopPolling();
         
+        const poll = async () => {
+             await fetchSession();
+        };
+
         // Always poll if we are generating or scanning to catch the update
         if (session?.status === 'scanning' || generating) {
-            pollInterval.current = setInterval(fetchSession, 2000);
+            // Poll every 1 second when scanning to get QR fast
+            pollInterval.current = setInterval(poll, 1000);
         } else if (session?.status === 'connected') {
-            pollInterval.current = setInterval(fetchSession, 5000);
+            // Once connected, we can stop polling aggressively, or stop completely if we trust realtime
+            // But let's keep a slow poll just in case
+            pollInterval.current = setInterval(poll, 5000);
         } else {
-             // Even if disconnected, poll occasionally in case of external updates
-             pollInterval.current = setInterval(fetchSession, 3000);
+             // Even if disconnected, poll occasionally
+             pollInterval.current = setInterval(poll, 3000);
         }
         
         return () => stopPolling();
     }, [session?.status, generating]);
+
+    // Realtime Subscription for Instant Status Update (QR Close Fix)
+    useEffect(() => {
+        if (!user) return;
+        
+        const channel = supabase
+            .channel(`whatsapp-connection-${user.id}`)
+            .on('postgres_changes', {
+                event: 'UPDATE',
+                schema: 'public',
+                table: 'whatsapp_sessions',
+                filter: `user_id=eq.${user.id}`
+            }, (payload) => {
+                const newStatus = payload.new.status;
+                
+                // Immediate State Update for UI Responsiveness
+                if (newStatus === 'connected') {
+                    setSession(payload.new);
+                    setGenerating(false);
+                    // Force refresh session to ensure all fields are synced
+                    fetchSession(); 
+                } else if (newStatus === 'scanning' && payload.new.qr_code) {
+                     setSession(payload.new);
+                } else {
+                    // Other status changes
+                    setSession(payload.new);
+                }
+            })
+            .subscribe();
+
+        return () => { supabase.removeChannel(channel); };
+    }, [user]);
 
     function stopPolling() {
         if (pollInterval.current) {

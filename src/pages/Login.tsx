@@ -33,6 +33,9 @@ export default function Login() {
           throw new Error('Lütfen e-posta ve şifrenizi giriniz.');
       }
 
+      // Clear any stale session first to avoid conflicts
+      await supabase.auth.signOut();
+
       const { data, error } = await supabase.auth.signInWithPassword({
         email,
         password,
@@ -56,10 +59,10 @@ export default function Login() {
 
         if (userData) {
           const role = userData.role;
-          if (role === 'admin') navigate('/admin/dashboard');
-          else if (role === 'employee') navigate('/employee/dashboard');
-          else if (role === 'sub_agent') navigate('/sub-agent/dashboard');
-          else navigate('/unauthorized');
+          if (role === 'admin') navigate('/admin/dashboard', { replace: true });
+          else if (role === 'employee') navigate('/employee/dashboard', { replace: true });
+          else if (role === 'sub_agent') navigate('/sub-agent/dashboard', { replace: true });
+          else navigate('/unauthorized', { replace: true });
         }
       }
     } catch (err: any) {

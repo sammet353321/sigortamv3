@@ -7,6 +7,7 @@ import { useNavigate } from 'react-router-dom';
 interface ChatGroup {
     id: string;
     name: string;
+    group_jid?: string; // WhatsApp Real ID
     member_count?: number;
     assigned_employee_group_id?: string;
     is_whatsapp_group?: boolean;
@@ -36,6 +37,7 @@ export default function ChatGroupsManagement() {
     const [newGroupName, setNewGroupName] = useState('');
     const [selectedGroup, setSelectedGroup] = useState<ChatGroup | null>(null);
     const [isWAConnected, setIsWAConnected] = useState(false);
+    const [myPhone, setMyPhone] = useState<string | null>(null);
     const [checkingStatus, setCheckingStatus] = useState(true);
 
     useEffect(() => {
@@ -50,12 +52,13 @@ export default function ChatGroupsManagement() {
         // 1. Check WA Status
         const { data } = await supabase
             .from('whatsapp_sessions')
-            .select('status')
+            .select('status, phone_number')
             .eq('user_id', user.id)
             .single();
         
         const connected = data?.status === 'connected';
         setIsWAConnected(connected);
+        if (data?.phone_number) setMyPhone(data.phone_number);
 
         // 2. If connected, fetch groups
         if (connected) {
@@ -70,10 +73,14 @@ export default function ChatGroupsManagement() {
     async function fetchGroups() {
         setLoading(true);
         try {
+            const { data: { user } } = await supabase.auth.getUser();
+            if (!user) return;
+
             const { data, error } = await supabase
                 .from('chat_groups')
                 .select('*, chat_group_members(count)')
-                .order('created_at', { ascending: false }); // Show newest first
+                .eq('created_by', user.id) // Filter to only show groups owned/synced by this admin
+                .order('created_at', { ascending: false });
             
             if (error) throw error;
             
@@ -120,27 +127,58 @@ export default function ChatGroupsManagement() {
     async function confirmDeleteGroup() {
         if (!groupToDelete) return;
 
-        try {
-            // 1. Mark as deleting FIRST to trigger backend immediately
-            const { error } = await supabase
-                .from('chat_groups')
-                .update({ status: 'deleting' })
-                .eq('id', groupToDelete);
+        // Find the group object to get group_jid
+        const group = groups.find(g => g.id === groupToDelete);
+        if (!group) return;
 
-            if (error) throw error;
-            
-            // 2. Optimistically remove from UI
+        try {
+            const { data: { user } } = await supabase.auth.getUser();
+            if (!user) throw new Error('Oturum açılmamış.');
+
+            // 1. Call Backend API to Leave & Delete
+            // If it's a real WA group and we have the JID, call the API
+            if (group.is_whatsapp_group && group.group_jid) {
+                const response = await fetch('http://localhost:3004/groups/leave', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        userId: user.id, 
+                        groupJid: group.group_jid 
+                    })
+                });
+                
+                if (!response.ok) {
+                    const err = await response.json();
+                    console.warn('API delete failed, trying direct DB delete...', err);
+                    // Fallback to direct DB delete if API fails (e.g. backend offline)
+                    throw new Error(err.error || 'API Hatası');
+                }
+            } else {
+                // If not a WA group or no JID, just delete from DB directly
+                const { error } = await supabase
+                    .from('chat_groups')
+                    .delete()
+                    .eq('id', groupToDelete);
+                if (error) throw error;
+            }
+
+            // 2. Remove from UI
             setGroups(prev => prev.filter(g => g.id !== groupToDelete));
             if (selectedGroup?.id === groupToDelete) setSelectedGroup(null);
             
-            toast.success('Grup silme işlemi başlatıldı.');
+            toast.success('Grup başarıyla silindi.');
 
-            // 3. Optional: Clean up members if backend doesn't handle cascade
-            // But let's leave it to backend/database constraints
-            
         } catch (error) {
             console.error('Error deleting group:', error);
-            toast.error('Silme işlemi başarısız. Yetkinizi kontrol edin.');
+            // Fallback: If API failed, try Force Delete from DB anyway
+            try {
+                 await supabase.from('chat_groups').delete().eq('id', groupToDelete);
+                 setGroups(prev => prev.filter(g => g.id !== groupToDelete));
+                 if (selectedGroup?.id === groupToDelete) setSelectedGroup(null);
+                 toast.success('Grup veritabanından silindi (WhatsApp bağlantısı kontrol edilemedi).');
+            } catch (dbError) {
+                 toast.error('Silme işlemi başarısız.');
+            }
         } finally {
             setIsDeleteModalOpen(false);
             setGroupToDelete(null);
@@ -275,6 +313,7 @@ export default function ChatGroupsManagement() {
             {selectedGroup && (
                 <GroupDetailModal 
                     group={selectedGroup} 
+                    myPhone={myPhone}
                     onClose={() => { setSelectedGroup(null); fetchGroups(); }} 
                 />
             )}
@@ -282,7 +321,7 @@ export default function ChatGroupsManagement() {
     );
 }
 
-function GroupDetailModal({ group, onClose }: { group: ChatGroup; onClose: () => void }) {
+function GroupDetailModal({ group, myPhone, onClose }: { group: ChatGroup; myPhone: string | null; onClose: () => void }) {
     const [activeTab, setActiveTab] = useState<'members' | 'permissions'>('members');
     
     return (
@@ -309,16 +348,16 @@ function GroupDetailModal({ group, onClose }: { group: ChatGroup; onClose: () =>
                         Yetkiler (Çalışanlar)
                     </button>
                 </div>
-
+                
                 <div className="flex-1 overflow-y-auto p-4">
-                    {activeTab === 'members' ? <GroupMembers group={group} /> : <GroupPermissions group={group} onUpdate={() => {}} />}
+                    {activeTab === 'members' ? <GroupMembers group={group} myPhone={myPhone} /> : <GroupPermissions group={group} onUpdate={() => {}} />}
                 </div>
             </div>
         </div>
     );
 }
 
-function GroupMembers({ group }: { group: ChatGroup }) {
+function GroupMembers({ group, myPhone }: { group: ChatGroup; myPhone: string | null }) {
     const [members, setMembers] = useState<ChatMember[]>([]);
     const [newPhone, setNewPhone] = useState('');
     const [newName, setNewName] = useState('');
@@ -340,19 +379,14 @@ function GroupMembers({ group }: { group: ChatGroup }) {
         let cleanPhone = newPhone.replace(/\D/g, '');
 
         // Smart Format to 90xxxxxxxxxx
-        if (cleanPhone.length === 10) { // 5321234567 -> 905321234567
+        if (cleanPhone.length === 10) { 
             cleanPhone = '90' + cleanPhone;
-        } else if (cleanPhone.length === 11 && cleanPhone.startsWith('0')) { // 05321234567 -> 905321234567
-            cleanPhone = '9' + cleanPhone.substring(1); // Replace leading 0 with 9
-            // or just '90' + cleanPhone.substring(1) is safer? No, '9' + '532...' = '9532...' WAIT.
-            // 0532... -> remove 0 -> 532... -> add 90 -> 90532...
+        } else if (cleanPhone.length === 11 && cleanPhone.startsWith('0')) { 
             cleanPhone = '90' + cleanPhone.substring(1);
         } else if (cleanPhone.length === 12 && cleanPhone.startsWith('90')) {
-            // Already correct
-        } else {
-            // Unknown format, maybe just try to save as is or alert?
-            // Let's assume user knows what they are doing if it doesn't match standard TR format
-            // But for TR numbers this logic covers most cases.
+            // Correct
+        } else if (cleanPhone.length > 10 && !cleanPhone.startsWith('90')) {
+            // Maybe it has a different country code, let's keep it but it might fail
         }
 
         try {
@@ -409,9 +443,13 @@ function GroupMembers({ group }: { group: ChatGroup }) {
                             <p className="font-medium text-gray-800">{member.phone}</p>
                             {member.name && <p className="text-xs text-gray-500">{member.name}</p>}
                         </div>
-                        <button onClick={() => handleDeleteMember(member.id)} className="text-red-500 hover:bg-red-50 p-1 rounded">
-                            <Trash2 size={16} />
-                        </button>
+                        {member.phone !== myPhone ? (
+                            <button onClick={() => handleDeleteMember(member.id)} className="text-red-500 hover:bg-red-50 p-1 rounded">
+                                <Trash2 size={16} />
+                            </button>
+                        ) : (
+                            <span className="text-[10px] bg-blue-50 text-blue-600 px-2 py-1 rounded font-bold uppercase tracking-wider">Bot Sahibi</span>
+                        )}
                     </div>
                 ))}
                 {members.length === 0 && <p className="text-center text-gray-500 text-sm">Grup boş.</p>}

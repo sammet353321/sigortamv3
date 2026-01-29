@@ -1,311 +1,348 @@
-require('dotenv').config();
 const express = require('express');
-const cors = require('cors'); // Import CORS
-const multer = require('multer'); // Import Multer
-const fs = require('fs');
-const db = require('./src/Database');
-const SessionManager = require('./src/SessionManager');
-const driveService = require('./src/DriveService'); // Import Drive Service
+const cors = require('cors');
+const http = require('http');
+const config = require('./src/config');
+const db = require('./src/db');
+const socket = require('./src/socket');
+const bot = require('./src/bot');
 
 const app = express();
-const port = process.env.PORT || 3004;
-
-// Middleware
 app.use(cors());
 app.use(express.json());
 
-// Configure Multer for temp uploads
-const upload = multer({ dest: 'uploads/' });
+const server = http.createServer(app);
+const io = socket.init(server);
 
-// Active sessions: userId -> SessionManager
-const sessions = new Map();
+// --- REST API ---
+app.get('/', (req, res) => res.send('Modern WhatsApp Bot Service is Running 🚀'));
 
-// --- SERVER ---
-app.get('/', (req, res) => res.send('WhatsApp Backend v3 (Optimized)'));
+app.post('/session/start', async (req, res) => {
+    const { userId } = req.body;
+    if (!userId) return res.status(400).send('userId required');
+    await bot.startSession(userId);
+    res.send({ status: 'started' });
+});
 
-// --- GOOGLE DRIVE UPLOAD ENDPOINT ---
-app.post('/upload-to-drive', upload.single('file'), async (req, res) => {
+app.post('/session/stop', async (req, res) => {
+    const { userId } = req.body;
+    if (!userId) return res.status(400).send('userId required');
+    await bot.stopSession(userId);
+    res.send({ status: 'stopped' });
+});
+
+app.post('/groups/leave', async (req, res) => {
+    const { userId, groupJid } = req.body;
+    if (!userId || !groupJid) return res.status(400).send('userId and groupJid required');
+
+    const session = bot.getSession(userId);
+    if (!session || !session.sock) {
+        return res.status(404).send({ error: 'Session not found or not connected' });
+    }
+
     try {
-        if (!req.file) {
-            return res.status(400).json({ error: 'No file uploaded' });
+        console.log(`[API] User ${userId} leaving group ${groupJid}`);
+        await session.deleteGroup(groupJid);
+        
+        // Also delete from DB to ensure sync
+        const { error } = await db.client
+            .from('chat_groups')
+            .delete()
+            .eq('group_jid', groupJid); // Use group_jid to match
+            
+        if (error) {
+             console.error('[API] Failed to delete group from DB:', error);
+             // Don't fail the request if WA leave succeeded
         }
 
-        console.log('[Upload] Received file:', req.file.originalname);
-
-        // Upload to Drive
-        const result = await driveService.uploadFile(req.file);
-
-        // Cleanup temp file
-        fs.unlink(req.file.path, (err) => {
-            if (err) console.error('Failed to delete temp file:', err);
-        });
-
-        res.json(result);
-    } catch (error) {
-        // Cleanup temp file on error too
-        if (req.file) {
-            fs.unlink(req.file.path, () => {});
-        }
-        console.error('[Upload] Error:', error);
-        res.status(500).json({ 
-            error: error.message || 'Upload failed',
-            details: 'Ensure service-account.json is present in whatsapp-backend folder.'
-        });
+        res.send({ success: true });
+    } catch (err) {
+        console.error('[API] Failed to leave group:', err);
+        res.status(500).send({ error: err.message });
     }
 });
 
-app.listen(port, () => console.log(`Server running on port ${port}`));
+// --- SUPABASE LISTENERS ---
 
-// --- LISTENERS ---
+// 1. Listen for Session Commands (Start/Stop via DB)
 db.client
-    .channel('whatsapp-backend-v3')
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'whatsapp_sessions' }, 
-    async (payload) => {
-        const session = payload.new;
-        if (!session) return;
-
-        const userId = session.user_id;
+    .channel('bot-session-commands')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'whatsapp_sessions' }, async (payload) => {
+        const { new: newRec, old: oldRec, eventType } = payload;
         
-        // 1. Start / Scan
-        if (session.status === 'scanning') {
-            // If already managing this user, check if we need to restart
-            let manager = sessions.get(userId);
-            
-            if (!manager) {
-                manager = new SessionManager(userId);
-                sessions.set(userId, manager);
-            }
+        if (!newRec) return; // Delete event
 
-            // Only start if not already initializing or connected
-            // But if 'scanning' is requested, it usually means user clicked "QR Code" again
-            // So we should probably force restart if not already doing so
-            if (!manager.isInitializing && !manager.sock?.user) {
-                // If it was in a 401 loop state, sock might be null but files exist.
-                // We MUST force clean files if we are in 'scanning' mode to generate new QR.
-                console.log(`[${userId}] Scanning requested. Forcing cleanup and restart.`);
-                
-                // Close any existing socket strictly
-                if (manager.sock) {
-                    manager.sock.end(undefined);
-                    manager.sock = null;
+        const userId = newRec.user_id;
+
+        // Start/Restart if status is 'scanning'
+        if (newRec.status === 'scanning') {
+            const currentSession = bot.getSession(userId);
+            // If we are 'scanning', it implies we WANT a new QR.
+            // Even if a session exists in memory, we should probably kill it and start fresh 
+            // IF it's not already scanning.
+            
+            // Logic:
+            // 1. If session exists and is connected -> Stop it, Clear it, Start New.
+            // 2. If session exists and is scanning -> Do nothing (already doing it).
+            // 3. If no session -> Start New.
+            
+            if (currentSession) {
+                if (currentSession.sock && currentSession.sock.user) {
+                     // It's connected but DB says 'scanning'. User wants to switch/re-scan?
+                     console.log(`[DB Listener] Force restarting session for ${userId} (Requested New QR)`);
+                     await bot.stopSession(userId);
+                     await bot.startSession(userId, true); // true = force clear
+                } else if (!currentSession.sock && !currentSession.qrCode) {
+                     // Not running?
+                     await bot.startSession(userId, true);
                 }
-                
-                manager.cleanupFiles(); 
-                
-                // Add delay to ensure FS operations complete and OS releases locks
-                setTimeout(() => {
-                    manager.start(false);
-                }, 2000);
+            } else {
+                console.log(`[DB Listener] Starting new session for ${userId}`);
+                await bot.startSession(userId, true); // Force clear to ensure fresh QR
             }
         }
 
-        // 2. Disconnect
-        if (session.status === 'disconnected') {
-            const manager = sessions.get(userId);
-            if (manager) {
-                await manager.stop();
-                sessions.delete(userId);
-            }
+        // Stop if disconnected
+        if (newRec.status === 'disconnected') {
+            console.log(`[DB Listener] Stopping session for ${userId}`);
+            await bot.stopSession(userId);
         }
     })
     .subscribe();
 
 // --- GROUP & MESSAGE LISTENERS ---
 db.client
-    .channel('whatsapp-groups')
+    .channel('whatsapp-groups-realtime')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_groups' }, 
     async (payload) => {
         const group = payload.new;
         
         // Handle DELETE event (payload.new is null, use payload.old)
         if (payload.eventType === 'DELETE' && payload.old) {
-             console.log(`[DB Sync] Group ${payload.old.id} deleted from DB.`);
+             const deletedGroupId = payload.old.id;
+             console.log(`[DB Sync] Group ${deletedGroupId} deleted from DB.`);
+             
+             // We need to know who created this group to find the right bot session.
+             // Since we only have the ID now, we might need to search active sessions or store this mapping.
+             // OR: We can rely on the fact that if a user deletes it, they are likely the owner.
+             // But wait, payload.old ONLY has the ID if replica identity is default.
+             // We can't easily find the owner.
+             
+             // WORKAROUND: Iterate all active sessions and try to leave/delete the group.
+             // This is not efficient but works for now.
+             
+             const allSessions = bot.getAllSessions();
+             for (const userId of allSessions) {
+                 const session = bot.getSession(userId);
+                 if (session && session.sock) {
+                     try {
+                         // Check if this session is part of the group
+                         // But we don't know if this group belongs to this session easily without querying WA.
+                         // Just try to leave. If not in group, it might throw or ignore.
+                         
+                         // CAUTION: The 'id' in DB is the WA JID.
+                         if (deletedGroupId.includes('@g.us')) {
+                             console.log(`[Group Action] User ${userId} leaving group ${deletedGroupId}`);
+                             await session.deleteGroup(deletedGroupId);
+                         }
+                     } catch (e) {
+                         // Ignore errors (e.g. not in group)
+                     }
+                 }
+             }
              return;
         }
 
         if (!group) return;
 
-        // Find the specific session for the user who owns/created this group
-        // This ensures we use the correct WhatsApp account to perform actions
-        const ownerId = group.created_by;
-        let manager = sessions.get(ownerId);
-
-        // Fallback for system actions or if created_by is missing/admin
-        if (!manager) {
-             // Try to find any active session that might be admin of this group?
-             // For now, if we can't find the exact creator, we can't safely operate on WA.
-             // But if it's a delete request, maybe we should try?
-             if (group.status === 'deleting') {
-                 // Try to find a session that has this group?
-                 // Not easy without tracking group-user map in memory.
-                 // For now, log warning.
-                 console.log(`[Group Action] No active session found for user ${ownerId}. Cannot process group ${group.id}`);
-             } else if (group.status === 'creating') {
-                 await db.client.from('chat_groups').update({ status: 'failed' }).eq('id', group.id);
-             }
-             return;
-        }
-
-        // Only process if the manager is connected
-        if (!manager.sock?.user) {
-             console.log(`[Group Action] Session for user ${ownerId} is not connected. Skipping.`);
-             return;
-        }
-
-        // 1. CREATE GROUP
-        if (group.status === 'creating') {
-            console.log('Creating group:', group.name);
-            const res = await manager.createGroup(group.name, []); // Participants empty initially
-            
-            if (res.success) {
-                // Update DB with real WA ID and active status
-                // We DELETE the temp row and INSERT the new one with WA JID
-                await db.client.from('chat_groups').delete().eq('id', group.id);
-                await db.client.from('chat_groups').insert({
-                    id: res.gid, // WA JID
-                    name: group.name,
-                    is_whatsapp_group: true,
-                    status: 'active',
-                    created_by: group.created_by
-                });
-            } else {
-                await db.client.from('chat_groups').update({ status: 'failed' }).eq('id', group.id);
-            }
-        }
-
-        // 2. DELETE GROUP
-        if (group.status === 'deleting') {
-            console.log('Deleting/Leaving group:', group.id);
-            // Attempt to leave/delete on WA
-            const res = await manager.deleteGroup(group.id);
-            
-            // Always delete from DB if successful OR if it was already gone/error (to keep sync)
-            // If strictly network error, maybe keep it? But user wants it gone.
-            // Let's force delete from DB to match UI expectation.
-            await db.client.from('chat_groups').delete().eq('id', group.id);
-        }
-    })
-    .subscribe();
-
-// --- MESSAGE LISTENER ---
-db.client
-    .channel('whatsapp-messages')
-    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, 
-    async (payload) => {
-        const msg = payload.new;
-        if (msg.status === 'pending' && msg.direction === 'outbound') {
-            let manager;
-            // 1. Try to find the specific session for this user
-            if (msg.user_id) {
-                manager = sessions.get(msg.user_id);
-            }
-
-            // 2. Fallback: Take the first available session (legacy behavior)
-            if (!manager) {
-                manager = sessions.values().next().value;
-            }
-
-            if (manager) {
-                const target = msg.group_id || msg.sender_phone;
-                await manager.sendMessage(target, msg.content);
-                await db.client.from('messages').update({ status: 'sent' }).eq('id', msg.id);
-            } else {
-                console.log(`No active session found to send message ${msg.id}`);
-            }
-        }
-    })
-    .subscribe();
-
-// --- GROUP MEMBER LISTENER (Add/Remove) ---
-db.client
-    .channel('whatsapp-members')
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_group_members' }, 
-    async (payload) => {
-        // We need to know:
-        // 1. Who is the owner of the group (to use their session)
-        // 2. What is the real WA Group ID (gid)
+        // Only process if it is a NEW request to create a WA group
+        // We use a specific status or flag? 
+        // Or we check if 'group_jid' is missing but 'is_whatsapp_group' is true?
         
-        let memberRecord = payload.new || payload.old;
-        if (!memberRecord) return;
+        // Let's assume frontend sets status='creating' for new groups to be created on WA
+        if (group.status === 'creating' && group.is_whatsapp_group) {
+            const ownerId = group.created_by;
+            const manager = bot.getSession(ownerId);
 
-        // Fetch group details to get owner and WA ID
+            if (manager && manager.sock?.user) {
+                console.log(`[Group Action] Creating group '${group.name}' for user ${ownerId}`);
+                try {
+                    // Create group on WA (empty participants initially)
+                    const res = await manager.createGroup(group.name, []); 
+                    
+                    if (res.success) {
+                        // Update DB with real WA ID and active status
+                        // We DELETE the temp row and INSERT the new one with WA JID as ID
+                        // OR update if we used a temp UUID?
+                        // Our schema uses TEXT id. If we used UUID, we swap it.
+                        
+                        console.log(`[Group Action] Group created! JID: ${res.gid}`);
+                        
+                        // Update the existing record with the real JID
+                        // If ID is PK and we change it, it's tricky.
+                        // Best way: Update 'group_jid' column and 'status'='active'
+                        
+                        await db.client.from('chat_groups')
+                            .update({ 
+                                group_jid: res.gid, 
+                                status: 'active',
+                            })
+                            .eq('id', group.id);
+
+                        // --- AUTO SYNC OWNER TO MEMBERS LIST ---
+                        if (manager.sock?.user?.id) {
+                            const ownerPhone = manager.sock.user.id.split(':')[0];
+                            console.log(`[Group Action] Adding owner ${ownerPhone} to members list for ${res.gid}`);
+                            await db.client.from('chat_group_members').insert({
+                                group_id: group.id,
+                                phone: ownerPhone,
+                                name: 'Yönetici (Kurucu)'
+                            });
+                        }
+                            
+                    }
+                } catch (err) {
+                    console.error(`[Group Action] Failed to create group:`, err);
+                    await db.client.from('chat_groups').update({ status: 'failed' }).eq('id', group.id);
+                }
+            } else {
+                console.log(`[Group Action] No active session for user ${ownerId}`);
+            }
+        }
+    })
+    .subscribe();
+
+// 2. Listen for Outbound Messages
+db.client
+    .channel('bot-outbound-messages')
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, async (payload) => {
+        const msg = payload.new;
+        if (msg.direction === 'outbound' && msg.status === 'pending') {
+            console.log(`[DB Listener] Sending message ID: ${msg.id}`);
+            
+            try {
+                let sessionUserId = msg.user_id;
+                
+                // --- CENTRALIZED SENDING LOGIC ---
+                // If message is for a group, we should use the session of the person who created/owns that group
+                // This allows employees to send messages through the Manager's WhatsApp.
+                if (msg.group_id) {
+                    const { data: group } = await db.client
+                        .from('chat_groups')
+                        .select('created_by')
+                        .eq('id', msg.group_id)
+                        .single();
+                    
+                    if (group && group.created_by) {
+                        sessionUserId = group.created_by;
+                        console.log(`[DB Listener] Routing message through group owner session: ${sessionUserId}`);
+                    }
+                }
+
+                let session = bot.getSession(sessionUserId);
+                
+                // --- ON-DEMAND SESSION START ---
+                if (!session) {
+                    console.log(`[DB Listener] Session not found in memory for ${sessionUserId}. Checking DB status...`);
+                    const dbSession = await db.getSession(sessionUserId);
+                    if (dbSession && dbSession.status === 'connected') {
+                        console.log(`[DB Listener] DB says connected. Waking up session for ${sessionUserId}...`);
+                        session = await bot.startSession(sessionUserId);
+                        // Wait for actual connection
+                        await session.waitForConnection();
+                    }
+                }
+
+                if (session && session.sock && session.connectionState === 'open') {
+                    const jid = msg.group_id || msg.sender_phone;
+                    await session.sendMessage(jid, msg.content);
+                    
+                    await db.updateMessageStatus(msg.id, 'sent');
+                    socket.emit('message_status', { id: msg.id, status: 'sent' });
+                } else {
+                    console.log(`[DB Listener] No active session for ${sessionUserId}`);
+                    // Optional: mark as failed if session not found
+                    // await db.updateMessageStatus(msg.id, 'failed');
+                }
+            } catch (err) {
+                console.error('Failed to send message:', err);
+                await db.updateMessageStatus(msg.id, 'failed');
+                socket.emit('message_status', { id: msg.id, status: 'failed' });
+            }
+        }
+    })
+    .subscribe();
+
+// 3. Listen for Chat Group Member Changes (Add/Remove from WhatsApp)
+db.client
+    .channel('chat-group-members-sync')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_group_members' }, async (payload) => {
+        const { eventType, new: newMember, old: oldMember } = payload;
+        
+        // We need the group JID to perform the action on WA
+        const groupId = newMember?.group_id || oldMember?.group_id;
+        if (!groupId) return;
+
+        // Fetch group details to get group_jid and owner
         const { data: group } = await db.client
             .from('chat_groups')
-            .select('created_by, id, is_whatsapp_group')
-            .eq('id', memberRecord.group_id)
+            .select('*')
+            .eq('id', groupId)
             .single();
 
-        if (!group || !group.is_whatsapp_group) return;
+        if (!group || !group.group_jid || !group.is_whatsapp_group) return;
 
-        const ownerId = group.created_by;
-        const gid = group.id; // This should be the WA JID (e.g. 123456@g.us)
+        const session = bot.getSession(group.created_by);
+        if (!session || !session.sock) return;
 
-        // Get Session
-        let manager = sessions.get(ownerId);
-        if (!manager || !manager.sock?.user) {
-            console.log(`[Member Action] No active session for group owner ${ownerId}`);
-            return;
-        }
-
-        // ADD MEMBER
-        if (payload.eventType === 'INSERT') {
-            console.log(`[Member Action] Adding ${memberRecord.phone} to ${gid}`);
-            try {
-                // Ensure phone is formatted
-                let phone = memberRecord.phone.replace(/\D/g, '');
-                if (!phone.includes('@')) phone += '@s.whatsapp.net';
-                
-                await manager.sock.groupParticipantsUpdate(gid, [phone], 'add');
-                console.log(`[Member Action] Added ${phone} to ${gid}`);
-            } catch (err) {
-                console.error(`[Member Action] Failed to add member:`, err);
+        try {
+            if (eventType === 'INSERT') {
+                console.log(`[Member Sync] Adding ${newMember.phone} to WA group ${group.group_jid}`);
+                await session.addParticipant(group.group_jid, [newMember.phone]);
+            } else if (eventType === 'DELETE') {
+                console.log(`[Member Sync] Removing ${oldMember.phone} from WA group ${group.group_jid}`);
+                await session.removeParticipant(group.group_jid, [oldMember.phone]);
             }
-        }
-
-        // REMOVE MEMBER
-        if (payload.eventType === 'DELETE') {
-            console.log(`[Member Action] Removing ${memberRecord.phone} from ${gid}`);
-            try {
-                let phone = memberRecord.phone.replace(/\D/g, '');
-                if (!phone.includes('@')) phone += '@s.whatsapp.net';
-                
-                await manager.sock.groupParticipantsUpdate(gid, [phone], 'remove');
-                console.log(`[Member Action] Removed ${phone} from ${gid}`);
-            } catch (err) {
-                console.error(`[Member Action] Failed to remove member:`, err);
+        } catch (err) {
+            console.error('[Member Sync] Failed to sync participant:', err.message);
+            
+            // IF INSERT failed, delete the record from DB so UI reflects that it failed
+            if (eventType === 'INSERT') {
+                console.log(`[Member Sync] Deleting DB record for ${newMember.phone} due to failure...`);
+                await db.client.from('chat_group_members').delete().eq('id', newMember.id);
             }
         }
     })
     .subscribe();
 
-console.log('Backend v3 initialized and listening for changes...');
-
-// --- RESTORE ACTIVE SESSIONS ---
-(async () => {
+// --- AUTO LOAD SESSIONS ---
+async function autoLoadSessions() {
+    console.log('[Bot] Checking for connected sessions to auto-load...');
     try {
-        // 1. First, check for any stuck sessions that need cleanup
-        // If a session is marked connected but folder is missing, or we want to force clean known bad sessions
-        // For now, let's just restore valid ones.
-        
-        const { data: sessionsData } = await db.client
+        const { data: sessions, error } = await db.client
             .from('whatsapp_sessions')
-            .select('*')
+            .select('user_id')
             .eq('status', 'connected');
+        
+        if (error) throw error;
 
-        if (sessionsData && sessionsData.length > 0) {
-            console.log(`Found ${sessionsData.length} active sessions. Restoring...`);
-            for (const s of sessionsData) {
-                // Skip restoring if we know it's the bad session ID that was looping
-                // Or better, restore it but with strict error handling in SessionManager
-                const manager = new SessionManager(s.user_id);
-                sessions.set(s.user_id, manager);
-                // Start in reconnect mode
-                manager.start(true).catch(err => {
-                    console.error(`Failed to restore session for ${s.user_id}:`, err);
+        if (sessions && sessions.length > 0) {
+            console.log(`[Bot] Auto-loading ${sessions.length} sessions...`);
+            for (const s of sessions) {
+                // We don't await so they load in parallel
+                bot.startSession(s.user_id).catch(err => {
+                    console.error(`[Bot] Failed to auto-load session for ${s.user_id}:`, err.message);
                 });
             }
+        } else {
+            console.log('[Bot] No active sessions to load.');
         }
-    } catch (error) {
-        console.error('Error restoring sessions:', error);
+    } catch (err) {
+        console.error('[Bot] Error in autoLoadSessions:', err.message);
     }
-})();
+}
+
+// --- START SERVER ---
+server.listen(config.port, () => {
+    console.log(`Server listening on port ${config.port}`);
+    autoLoadSessions(); // Run on startup
+});

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useLayoutEffect, useMemo } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
-import { Search, Send, Paperclip, FileText, User, Users, ChevronDown, X, ZoomIn, ZoomOut, RotateCcw, Filter, Car, Ban } from 'lucide-react';
+import { Search, Send, Paperclip, FileText, User, Users, ChevronDown, X, ZoomIn, ZoomOut, RotateCcw, Filter, Car, Ban, RefreshCw } from 'lucide-react';
 import { format } from 'date-fns';
 import { useNavigate, useSearchParams, useLocation } from 'react-router-dom'; // Import useSearchParams
 import EmployeeNewQuote from './NewQuote';
@@ -10,6 +10,8 @@ interface ChatGroup {
     id: string;
     name: string;
     assigned_employee_group_id?: string;
+    is_whatsapp_group?: boolean;
+    group_jid?: string;
 }
 
 interface ChatGroupMember {
@@ -72,6 +74,9 @@ export default function WhatsAppMessages() {
     const [quoteModal, setQuoteModal] = useState<{ isOpen: boolean; imgUrl: string | null; phone: string | null }>({ isOpen: false, imgUrl: null, phone: null });
     const [ocrProcessing, setOcrProcessing] = useState(false);
 
+    // Current Group Details State (Fix for "Alıcı" glitch)
+    const [currentGroup, setCurrentGroup] = useState<ChatGroup | null>(null);
+
     // WhatsApp Connection State
     const [isWhatsAppConnected, setIsWhatsAppConnected] = useState<boolean | null>(null);
     const [myPhone, setMyPhone] = useState<string | null>(null);
@@ -129,6 +134,26 @@ export default function WhatsAppMessages() {
         };
 
         checkConnection();
+        
+        // Realtime Subscription for Connection Status
+        const channel = supabase
+            .channel(`session-status-${user.id}`)
+            .on('postgres_changes', {
+                event: 'UPDATE',
+                schema: 'public',
+                table: 'whatsapp_sessions',
+                filter: `user_id=eq.${user.id}`
+            }, (payload) => {
+                const newStatus = payload.new.status;
+                setIsWhatsAppConnected(newStatus === 'connected');
+                if (payload.new.phone_number) setMyPhone(payload.new.phone_number);
+                
+                // If connected, close any QR modals (This will be handled by the parent component, 
+                // but updating state here triggers re-renders that might help)
+            })
+            .subscribe();
+
+        return () => { supabase.removeChannel(channel); };
     }, [user]);
 
     // 1. Initial Data Fetch (Employee Groups & My Groups)
@@ -175,6 +200,27 @@ export default function WhatsAppMessages() {
         }
     }, [activeFilter, myGroupIds]); 
 
+    // --- TASK: RESET CHAT ON FILTER CHANGE ---
+    useEffect(() => {
+        // When activeFilter changes, we should reset the current selection IF the current selection
+        // is no longer valid in the new list. But since we are fetching a new list anyway, 
+        // let's just clear the selection to force the user to pick a group from the new context.
+        // Or better: Only clear if the user explicitly clicked a filter tab (which updates activeFilter).
+        // However, this effect runs on mount too. We need to distinguish.
+        // Actually, the user requirement is: "sol üstteki grubum yazan yerde başka bir grub seçtiğimizde mseaj sayfası sıfrılansın"
+        // This means when `activeFilter` changes.
+        
+        if (activeFilter) {
+             setSelectedGroupId(null);
+             setMessages([]);
+             setGroupMembers([]);
+             setSelectedTargetMember(null);
+             setCurrentGroup(null);
+             // Clear localStorage to prevent auto-reopening the old group from a different filter
+             localStorage.removeItem('lastOpenedGroupId');
+        }
+    }, [activeFilter]);
+
     async function fetchChatGroups() {
         try {
             let query = supabase.from('chat_groups').select('*').order('name');
@@ -209,8 +255,13 @@ export default function WhatsAppMessages() {
             const { data } = await query;
             setGroups(data || []);
             
-            // Auto-select first group if only one available
-            if (data && data.length === 1 && !selectedGroupId) {
+            // Task 1: Auto-select last opened group
+            const lastId = localStorage.getItem('lastOpenedGroupId');
+            const lastGroupExists = data?.find(g => g.id === lastId);
+
+            if (lastId && lastGroupExists) {
+                 setSelectedGroupId(lastId);
+            } else if (data && data.length === 1 && !selectedGroupId) {
                 setSelectedGroupId(data[0].id);
             }
 
@@ -243,6 +294,7 @@ export default function WhatsAppMessages() {
     // 3. Fetch Group Details (Members & Messages) when group selected
     useEffect(() => {
         if (selectedGroupId) {
+            localStorage.setItem('lastOpenedGroupId', selectedGroupId); // Task 1
             // If quote panel is open, we update its context too if needed
             if (quotePanel.isOpen) {
                  setQuotePanel(prev => ({
@@ -253,6 +305,13 @@ export default function WhatsAppMessages() {
             fetchGroupMembers();
         }
     }, [selectedGroupId]);
+
+    const handleManualRefresh = () => {
+        if (selectedGroupId) {
+            fetchGroupMembers();
+            console.log('Manual refresh triggered for group:', selectedGroupId);
+        }
+    };
 
     async function fetchGroupMembers() {
         if (!selectedGroupId) return;
@@ -270,13 +329,19 @@ export default function WhatsAppMessages() {
         
         setGroupMembers(members || []);
         
-        if (group?.is_whatsapp_group && group?.group_jid) {
+        // --- CRITICAL FIX: TARGET SELECTION LOGIC ---
+        // 1. If group has a JID (It's a WA Group or mapped Individual), ALWAYS prefer group target mode.
+        if (group?.group_jid) {
+            console.log('Group JID found, setting target to GROUP mode:', group.group_jid);
             setSelectedTargetMember({
                 id: 'group',
                 phone: group.group_jid, 
-                name: 'Grup Geneli'
+                name: group.name // Use group name as target name
             });
-        } else {
+        } 
+        // 2. If no JID, fall back to member selection (Legacy/Manual Groups)
+        else {
+            console.log('No Group JID, falling back to member selection.');
             if (members && members.length > 0) {
                 setSelectedTargetMember(members[0]);
             } else {
@@ -299,15 +364,13 @@ export default function WhatsAppMessages() {
         let query = supabase
             .from('messages')
             .select('*')
-            .order('created_at', { ascending: true });
+            .order('created_at', { ascending: false }) // Get newest first
+            .limit(20); // Optimization: Limit to last 20 messages for speed (Task 3)
 
         if (groupId) {
-            const groupJid = phones.find(p => p.includes('@g.us'));
-            let orCondition = `group_id.eq.${groupId}`;
-            if (groupJid) {
-                orCondition += `,sender_phone.eq.${groupJid}`;
-            }
-            query = query.or(orCondition);
+            // STRICT FILTERING: Just use the group_id.
+            // We fixed the backend to always save group_id, so this is now safe and reliable.
+            query = query.eq('group_id', groupId);
         } else {
             if (phones.length === 0) return;
             query = query.in('sender_phone', phones);
@@ -316,14 +379,15 @@ export default function WhatsAppMessages() {
         const { data, error } = await query;
         
         if (error) {
-            // Ignore network abort errors
-            if (error.code !== '20' && error.message !== 'FetchError: The user aborted a request.') {
-               // console.warn('Messages fetch error:', error);
-            }
+            console.error('Messages fetch error:', error);
             return;
-       }
+        }
+       
+       console.log(`[Fetch] Group: ${groupId}, Count: ${data?.length || 0}`);
 
-        setMessages(data || []);
+        // Reverse back to chronological order for display
+        const sortedData = (data || []).sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+        setMessages(sortedData);
         
         // Mark as read immediately when loaded
         if (data && data.length > 0) {
@@ -349,34 +413,24 @@ export default function WhatsAppMessages() {
     useEffect(() => {
         if (!selectedGroupId) return;
 
+        // Use a broader subscription and filter client-side to be absolutely sure
         const channel = supabase
-            .channel(`group-messages-${selectedGroupId}`) // Unique channel name per group
+            .channel(`global-messages-listener`) 
             .on('postgres_changes', { 
                 event: 'INSERT', 
                 schema: 'public', 
-                table: 'messages', 
-                filter: `group_id=eq.${selectedGroupId}` // Filter by Group ID directly
+                table: 'messages'
             }, (payload) => {
                 const newMsg = payload.new as any;
 
-                // Frontend Echo Prevention
-                    if (newMsg.direction === 'inbound') {
-                         const normalize = (p: string) => String(p || '').replace(/\D/g, '').slice(-10);
-                         
-                         const sPhone10 = normalize(newMsg.sender_phone);
-                         const myPhone10 = normalize(myPhone);
-                         
-                         // If we know our phone, and sender matches (Last 10 digits) -> Ignore
-                         if (sPhone10 && myPhone10 && sPhone10 === myPhone10) {
-                             return;
-                         }
+                // Log every message to debug
+                // console.log('Global Listener saw message:', newMsg.group_id, newMsg.content);
 
-                     // Extra Safety: If message ID starts with BAE5 (Baileys Outbound), ignore as inbound
-                     if (newMsg.wa_message_id && newMsg.wa_message_id.startsWith('BAE5')) {
-                         return;
-                     }
-                }
+                // Strict client-side filter
+                if (newMsg.group_id !== selectedGroupId) return;
                 
+                console.log('Realtime MSG Matched & Appended:', newMsg);
+
                 setMessages(prev => {
                     // Improved Dedup: Check for temp message with same content
                     
@@ -398,7 +452,8 @@ export default function WhatsAppMessages() {
                     // 2. Prevent ID duplicates
                     if (prev.some(m => m.id === newMsg.id)) return prev;
 
-                    // ECHO CHECK 3: Check against recent Outbound messages in state (Optimistic UI match)
+                    // ECHO CHECK 3 DISABLED
+                    /*
                     if (newMsg.direction === 'inbound') {
                         const hasMatchingTemp = prev.some(m => 
                             m.id.startsWith('temp-') && 
@@ -407,6 +462,7 @@ export default function WhatsAppMessages() {
                         );
                         if (hasMatchingTemp) return prev;
                     }
+                    */
 
                     return [...prev, newMsg];
                 });
@@ -433,31 +489,39 @@ export default function WhatsAppMessages() {
         // Ensure sorted by date
         const sorted = [...messages].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
         const result: Message[] = [];
-        const recentOutbound = new Map<string, number>(); // Key: content+phone, Value: timestamp
+        const recentOutbound = new Map<string, number>(); // Key: content, Value: timestamp
 
         for (const msg of sorted) {
             const time = new Date(msg.created_at).getTime();
-            // Use content and sender_phone as key. 
-            // Note: sender_phone is the Customer's phone for both Inbound and Outbound in this system architecture.
-            const key = `${msg.content?.trim()}|${msg.sender_phone}`;
+            // Use ONLY content as key for echo detection to be aggressive against duplicates
+            // We ignore sender_phone because Outbound uses TargetPhone while Inbound Echo uses AdminPhone
+            const contentKey = msg.content?.trim(); 
+
+            if (!contentKey) {
+                result.push(msg);
+                continue;
+            }
 
             if (msg.direction === 'outbound') {
-                recentOutbound.set(key, time);
+                recentOutbound.set(contentKey, time);
                 result.push(msg);
             } else {
+                // Inbound Message
+                
                 // 1. Strict Echo Prevention by User ID (Works even if phone fetch fails)
-            if (user?.id && msg.user_id === user.id && msg.direction === 'inbound') {
-                continue;
-            }
+                if (user?.id && msg.user_id === user.id) {
+                    continue;
+                }
 
-            // 2. Strict Echo Prevention by Phone
-            if (myPhone && msg.sender_phone === myPhone) {
-                continue;
-            }
+                // 2. Strict Echo Prevention by Phone
+                if (myPhone && msg.sender_phone === myPhone) {
+                    continue;
+                }
 
-                const lastOutboundTime = recentOutbound.get(key);
-                // Check if we saw this EXACT content sent to this EXACT person within last 5 minutes
-                if (lastOutboundTime && (time - lastOutboundTime) < 5 * 60 * 1000) { 
+                const lastOutboundTime = recentOutbound.get(contentKey);
+                // Check if we saw this EXACT content sent as Outbound within last 2 minutes
+                // If so, assume it's an echo from the bot system and hide it
+                if (lastOutboundTime && (time - lastOutboundTime) < 2 * 60 * 1000) { 
                      // It's a duplicate echo! Skip it.
                      continue;
                 }
@@ -465,7 +529,15 @@ export default function WhatsAppMessages() {
             }
         }
         return result;
-    }, [messages, myPhone]);
+    }, [messages, myPhone, user?.id]);
+
+    const isMemberOfCurrentGroup = useMemo(() => {
+        if (!selectedGroupId || !myPhone) return false;
+        // Check if any member phone matches myPhone (ignoring non-digits)
+        const normalize = (p: string) => String(p || '').replace(/\D/g, '').slice(-10);
+        const myP = normalize(myPhone);
+        return groupMembers.some(m => normalize(m.phone) === myP);
+    }, [selectedGroupId, myPhone, groupMembers]);
 
     const handleSendMessage = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -728,6 +800,8 @@ export default function WhatsAppMessages() {
                     >
                         WhatsApp'ı Bağla
                     </button>
+                    {/* Hidden debug info to check if state is stuck */}
+                    <div className="mt-4 text-xs text-gray-300">Status: Disconnected</div>
                 </div>
             </div>
         );
@@ -824,6 +898,17 @@ export default function WhatsAppMessages() {
             {/* Chat Area - Flexible width */}
             <div className="flex-1 min-w-0 flex flex-col bg-[#e5ddd5] relative">
                 <div className="absolute inset-0 opacity-10 pointer-events-none" style={{ backgroundImage: 'url("https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png")' }}></div>
+                
+                {!selectedGroupId ? (
+                    <div className="flex-1 flex flex-col items-center justify-center bg-[#f0f2f5] text-gray-500 relative z-10">
+                       <div className="w-24 h-24 bg-gray-200 rounded-full flex items-center justify-center mb-4 opacity-50">
+                           <Users size={48} className="text-gray-400" />
+                       </div>
+                       <h3 className="text-xl font-medium text-gray-700">Grup Seçiniz</h3>
+                       <p className="text-sm mt-2">Mesajları görüntülemek için soldan bir grup seçin.</p>
+                    </div>
+                ) : (
+                <>
                 {/* Chat Header */}
                 <div className="p-3 bg-white border-b border-gray-200 flex justify-between items-center shadow-sm z-10">
                     <div className="flex items-center">
@@ -831,30 +916,34 @@ export default function WhatsAppMessages() {
                             <Users size={20} />
                         </div>
                         <div>
-                            <h3 className="font-bold text-gray-800">
-                                {groups.find(g => g.id === selectedGroupId)?.name || 'Grup Seçiniz'}
+                            <h3 className="font-bold text-gray-800 flex items-center gap-2">
+                                {currentGroup?.name || groups.find(g => g.id === selectedGroupId)?.name || 'Grup Seçiniz'}
                             </h3>
                             <div className="flex items-center text-xs text-gray-500">
-                                <span className="mr-1">Mesaj Gönderilecek:</span>
-                                {selectedTargetMember?.id === 'group' ? (
-                                    <span className="font-bold text-green-600 bg-green-50 px-2 py-0.5 rounded">WhatsApp Grubu</span>
+                                {(currentGroup?.group_jid || groups.find(g => g.id === selectedGroupId)?.group_jid) ? (
+                                    <span className="text-gray-600 italic">
+                                        <span className="font-semibold text-green-600">{currentGroup?.name || groups.find(g => g.id === selectedGroupId)?.name}</span> grubuna mesaj gönderiyorsunuz
+                                    </span>
                                 ) : (
-                                    <div className="relative inline-block">
-                                        <select 
-                                            className="appearance-none bg-gray-100 border border-gray-300 rounded px-2 py-0.5 pr-6 cursor-pointer focus:outline-none focus:border-blue-500"
-                                            value={selectedTargetMember?.id || ''}
-                                            onChange={(e) => {
-                                                const member = groupMembers.find(m => m.id === e.target.value);
-                                                setSelectedTargetMember(member || null);
-                                            }}
-                                        >
-                                            {groupMembers.map(m => (
-                                                <option key={m.id} value={m.id}>
-                                                    {m.name || m.phone} ({m.phone})
-                                                </option>
-                                            ))}
-                                        </select>
-                                        <ChevronDown size={12} className="absolute right-1 top-1/2 transform -translate-y-1/2 pointer-events-none text-gray-500" />
+                                    <div className="flex items-center gap-1">
+                                        <span>Alıcı:</span>
+                                        <div className="relative inline-block">
+                                            <select 
+                                                className="appearance-none bg-gray-100 border border-gray-300 rounded px-2 py-0.5 pr-6 cursor-pointer focus:outline-none focus:border-blue-500 font-medium text-gray-700"
+                                                value={selectedTargetMember?.id || ''}
+                                                onChange={(e) => {
+                                                    const member = groupMembers.find(m => m.id === e.target.value);
+                                                    setSelectedTargetMember(member || null);
+                                                }}
+                                            >
+                                                {groupMembers.map(m => (
+                                                    <option key={m.id} value={m.id}>
+                                                        {m.name || m.phone} ({m.phone})
+                                                    </option>
+                                                ))}
+                                            </select>
+                                            <ChevronDown size={12} className="absolute right-1 top-1/2 transform -translate-y-1/2 pointer-events-none text-gray-500" />
+                                        </div>
                                     </div>
                                 )}
                             </div>
@@ -867,7 +956,19 @@ export default function WhatsAppMessages() {
                     {filteredMessages.map((msg) => {
                         const member = groupMembers.find(m => m.phone === msg.sender_phone);
                         // Priority: Manually assigned name -> WhatsApp PushName -> Phone
-                        const senderName = member?.name || msg.sender_name || member?.phone || msg.sender_phone;
+                        // Fix: If outbound, we want to show who we sent it TO (which is the target group/member)
+                        // OR if it's a group chat, we just show "Ben" or the user's name?
+                        // Actually, for outbound, "Kime: X" usually means the recipient.
+                        
+                        let displayLabel = '';
+                        if (msg.direction === 'inbound') {
+                            // Task 5: Use sender_name (PushName) if available
+                            displayLabel = msg.sender_name || member?.name || msg.sender_name || member?.phone || msg.sender_phone;
+                        } else {
+                            // Outbound
+                            // Task 5: Use Employee Name
+                            displayLabel = user?.name || 'Ben';
+                        }
 
                         return (
                             <div 
@@ -875,7 +976,7 @@ export default function WhatsAppMessages() {
                                 className={`flex flex-col ${msg.direction === 'outbound' ? 'items-end' : 'items-start'}`}
                             >
                                 <span className="text-[10px] text-gray-600 mb-0.5 px-1 font-medium">
-                                    {msg.direction === 'inbound' ? senderName : `Kime: ${senderName}`}
+                                    {displayLabel}
                                 </span>
                                 <div className={`max-w-[70%] rounded-lg p-3 shadow-sm relative ${
                                     msg.direction === 'outbound' ? 'bg-[#d9fdd3] rounded-tr-none' : 'bg-white rounded-tl-none'
@@ -961,26 +1062,33 @@ export default function WhatsAppMessages() {
 
                 {/* Input Area */}
                 <div className="p-3 bg-white border-t border-gray-200">
-                    <form onSubmit={handleSendMessage} className="flex items-center space-x-2">
-                        <button type="button" className="p-2 text-gray-500 hover:bg-gray-100 rounded-full">
-                            <Paperclip size={20} />
-                        </button>
-                        <input 
-                            type="text" 
-                            value={newMessage}
-                            onChange={(e) => setNewMessage(e.target.value)}
-                            placeholder={selectedTargetMember ? `${selectedTargetMember.name || selectedTargetMember.phone} kişisine mesaj yazın...` : "Mesaj yazın..."}
-                            className="flex-1 py-2 px-4 border border-gray-300 rounded-full focus:ring-2 focus:ring-green-500 outline-none"
-                            disabled={!selectedTargetMember}
-                        />
-                        <button 
-                            type="submit" 
-                            disabled={!newMessage.trim() || !selectedTargetMember}
-                            className="p-2 bg-[#00a884] text-white rounded-full hover:bg-[#008f6f] disabled:opacity-50 transition-colors"
-                        >
-                            <Send size={20} />
-                        </button>
-                    </form>
+                    {!isMemberOfCurrentGroup && selectedGroupId ? (
+                        <div className="flex items-center justify-center p-2 bg-red-50 border border-red-100 rounded-lg text-red-600 text-sm font-medium">
+                            <Ban size={16} className="mr-2" />
+                            Bu grupta ekli değilsiniz, mesaj gönderemezsiniz.
+                        </div>
+                    ) : (
+                        <form onSubmit={handleSendMessage} className="flex items-center space-x-2">
+                            <button type="button" className="p-2 text-gray-500 hover:bg-gray-100 rounded-full">
+                                <Paperclip size={20} />
+                            </button>
+                            <input 
+                                type="text" 
+                                value={newMessage}
+                                onChange={(e) => setNewMessage(e.target.value)}
+                                placeholder={selectedTargetMember ? `${selectedTargetMember.name || selectedTargetMember.phone} kişisine mesaj yazın...` : "Mesaj yazın..."}
+                                className="flex-1 py-2 px-4 border border-gray-300 rounded-full focus:ring-2 focus:ring-green-500 outline-none"
+                                disabled={!selectedTargetMember}
+                            />
+                            <button 
+                                type="submit" 
+                                disabled={!newMessage.trim() || !selectedTargetMember}
+                                className="p-2 bg-[#00a884] text-white rounded-full hover:bg-[#008f6f] disabled:opacity-50 transition-colors"
+                            >
+                                <Send size={20} />
+                            </button>
+                        </form>
+                    )}
                 </div>
 
                 {/* Toast Notification */}
@@ -988,6 +1096,9 @@ export default function WhatsAppMessages() {
                     <div className="fixed bottom-10 left-1/2 transform -translate-x-1/2 bg-gray-800 text-white px-4 py-2 rounded-lg shadow-lg z-50 transition-opacity duration-300 animate-in fade-in slide-in-from-bottom-2">
                         {toastMessage}
                     </div>
+                )}
+
+                </>
                 )}
 
             </div>

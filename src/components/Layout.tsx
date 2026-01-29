@@ -60,8 +60,6 @@ export default function Layout() {
   const handleSignOut = async () => {
     try {
         // Attempt Supabase signOut
-        // We don't force navigation in finally block to avoid race conditions. 
-        // AuthContext will detect session change and redirect automatically via PrivateRoute or its own logic.
         const { error } = await supabase.auth.signOut();
         if (error) {
              // Ignore network abort errors which happen if page navigates away immediately
@@ -74,16 +72,10 @@ export default function Layout() {
         if (!error.message?.includes('aborted')) {
             console.error('Logout error:', error);
         }
+    } finally {
+        // Force redirect to login page
+        window.location.href = '/login';
     }
-    // We let AuthContext handle the redirect when session becomes null.
-    // If we navigate here manually, we might race with the context update.
-    // But to be safe if context doesn't trigger, we can navigate after a small delay if user is still here.
-    // However, simplest fix for ERR_ABORTED is to just fire and forget or await without strict dependency on result.
-    // For now, removing explicit navigate(replace) to see if AuthContext handles it cleaner, 
-    // OR keeping it but ensuring we catch the abort.
-    // navigate('/login', { replace: true });
-    // Force reload to clear all states if needed, or just let context redirect
-    window.location.href = '/login'; 
   };
 
   const handleOpenQuoteModal = () => {
