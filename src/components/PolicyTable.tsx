@@ -149,15 +149,18 @@ export default function PolicyTable() {
     setData([]); 
 
     try {
-      let query = supabase.from('policeler').select('*', { count: 'exact', head: false });
+      // Optimize: Select only required columns + count
+      let query = supabase.from('policeler').select(`
+            id, ad_soyad, dogum_tarihi, sirket, tarih, sasi, plaka, tc_vkn, 
+            belge_no, arac_cinsi, brut_prim, tur, kesen, ilgili_kisi, 
+            police_no, acente, kart, ek_bilgiler_iletisim, net_prim, 
+            komisyon, durum
+      `, { count: 'exact', head: false });
 
       // Employee Filter: Only show own policies
       if (user?.role === 'employee' || user?.role === 'sub_agent') {
-          // Use kesen_id if that is the correct column, otherwise kesen
-          // Based on previous errors, kesen_id seemed correct for relations, but let's check.
-          // The table definition might use kesen as uuid?
-          // For now using 'kesen' as it was in the code, but if it fails we change to kesen_id
-          query = query.eq('kesen_id', user.id); 
+          // Use kesen (not kesen_id) as per error logs confirming the column name
+          query = query.eq('kesen', user.id); 
       }
 
       // Month Filter (Full Month Coverage Fix - Timezone Safe)

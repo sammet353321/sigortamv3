@@ -275,8 +275,8 @@ export default function PolicyCut() {
                     const formData = new FormData();
                     formData.append('file', policyFile);
                     
-                    // Local Backend URL (Assuming running on 3004)
-                    const response = await fetch('http://localhost:3004/upload-to-drive', {
+                    // Local Backend URL (Dynamic Host)
+                    const response = await fetch(`http://${window.location.hostname}:3004/upload-to-drive`, {
                         method: 'POST',
                         body: formData
                     });

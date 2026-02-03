@@ -73,8 +73,8 @@ export default function Layout() {
             console.error('Logout error:', error);
         }
     } finally {
-        // Force redirect to login page
-        window.location.href = '/login';
+        // Soft redirect to login page (SPA navigation)
+        navigate('/login');
     }
   };
 

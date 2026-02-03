@@ -4,6 +4,7 @@ import { NotificationProvider } from "@/context/NotificationContext";
 import PrivateRoute from "@/components/PrivateRoute";
 import Layout from "@/components/Layout";
 import Login from "@/pages/Login";
+import LandingPage from "@/pages/LandingPage";
 import AdminDashboard from "@/pages/admin/Dashboard";
 import AdminQuotesPage from "@/pages/admin/Quotes";
 import AdminPoliciesPage from "@/pages/admin/Policies";
@@ -37,6 +38,7 @@ export default function App() {
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/unauthorized" element={<Unauthorized />} />
+            <Route path="/" element={<LandingPage />} />
             
             <Route element={<PrivateRoute />}>
               <Route element={<Layout />}>
@@ -76,8 +78,6 @@ export default function App() {
                 </Route>
               </Route>
             </Route>
-
-            <Route path="/" element={<Navigate to="/login" replace />} />
           </Routes>
         </Router>
       </NotificationProvider>

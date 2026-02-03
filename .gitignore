@@ -118,5 +118,10 @@ dist-final
 # Trae
 .trae
 
+# WhatsApp Bot Data
+whatsapp-backend/auth_info_multi/
+whatsapp-backend/baileys_store_multi.json
+whatsapp-backend/sessions/
+
 # Secrets
 whatsapp-backend/service-account.json

@@ -14,9 +14,16 @@ export default function Login() {
   // Clear session on mount to fix stuck states
   useEffect(() => {
     const clearSession = async () => {
-        // Optional: clear session if we landed here to force fresh login
-        // localStorage.removeItem('sb-aqubbkxsfwmhfbolkfah-auth-token'); 
+        try {
+            await supabase.auth.signOut();
+            localStorage.removeItem('sb-aqubbkxsfwmhfbolkfah-auth-token');
+        } catch (e) {
+            console.warn('Session clear warning:', e);
+            // Force remove anyway
+            localStorage.removeItem('sb-aqubbkxsfwmhfbolkfah-auth-token');
+        }
     };
+    clearSession();
   }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -34,7 +41,11 @@ export default function Login() {
       }
 
       // Clear any stale session first to avoid conflicts
-      await supabase.auth.signOut();
+      try {
+        await supabase.auth.signOut();
+      } catch (signOutError) {
+        console.warn('Sign out failed, proceeding with login:', signOutError);
+      }
 
       const { data, error } = await supabase.auth.signInWithPassword({
         email,

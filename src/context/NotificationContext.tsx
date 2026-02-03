@@ -64,13 +64,22 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
 
     async function fetchNotifications() {
         if (!user) return;
-        const { data } = await supabase
-            .from('notifications')
-            .select('*')
-            .eq('user_id', user.id)
-            .order('created_at', { ascending: false })
-            .limit(50);
-        setNotifications(data || []);
+        try {
+            const { data, error } = await supabase
+                .from('notifications')
+                .select('*')
+                .eq('user_id', user.id)
+                .order('created_at', { ascending: false })
+                .limit(50);
+            
+            if (error) {
+                console.warn('Failed to fetch notifications:', error.message);
+                return;
+            }
+            setNotifications(data || []);
+        } catch (err) {
+            console.warn('Error fetching notifications:', err);
+        }
     }
 
     // Helper to manually create notification (if needed by client-side logic, e.g. error alerts)

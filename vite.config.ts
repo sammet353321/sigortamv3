@@ -4,7 +4,6 @@ import tsconfigPaths from "vite-tsconfig-paths";
 
 // https://vite.dev/config/
 export default defineConfig({
-  base: './', // Important for Electron to load assets from file://
   server: {
     host: true,
     allowedHosts: [

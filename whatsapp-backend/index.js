@@ -19,7 +19,7 @@ app.get('/', (req, res) => res.send('Modern WhatsApp Bot Service is Running 🚀
 app.post('/session/start', async (req, res) => {
     const { userId } = req.body;
     if (!userId) return res.status(400).send('userId required');
-    await bot.startSession(userId);
+    await bot.startSession(userId, io);
     res.send({ status: 'started' });
 });
 
@@ -30,33 +30,41 @@ app.post('/session/stop', async (req, res) => {
     res.send({ status: 'stopped' });
 });
 
+/*
 app.post('/groups/leave', async (req, res) => {
-    const { userId, groupJid } = req.body;
-    if (!userId || !groupJid) return res.status(400).send('userId and groupJid required');
+    // DISABLED BY USER REQUEST to prevent accidental group leaving/deletion
+    res.status(403).send({ error: 'Group leaving/deletion is disabled.' });
+});
+*/
+app.post('/groups/leave', async (req, res) => {
+    res.status(403).send({ error: 'Group leaving/deletion is disabled by administrator.' });
+});
+
+app.post('/groups/sync', async (req, res) => {
+    const { userId } = req.body;
+    if (!userId) return res.status(400).send('userId required');
 
     const session = bot.getSession(userId);
-    if (!session || !session.sock) {
+    if (!session) {
         return res.status(404).send({ error: 'Session not found or not connected' });
     }
 
     try {
-        console.log(`[API] User ${userId} leaving group ${groupJid}`);
-        await session.deleteGroup(groupJid);
-        
-        // Also delete from DB to ensure sync
-        const { error } = await db.client
-            .from('chat_groups')
-            .delete()
-            .eq('group_jid', groupJid); // Use group_jid to match
-            
-        if (error) {
-             console.error('[API] Failed to delete group from DB:', error);
-             // Don't fail the request if WA leave succeeded
-        }
+        // Run sync in background to prevent timeout
+        bot.syncGroups(session, userId)
+            .then(async () => {
+                console.log(`[API] Sync background task finished for ${userId}`);
+                io.emit('sync_complete', { userId });
+                // Trigger Supabase Realtime for Frontend
+                await db.updateSession(userId, { updated_at: new Date().toISOString() });
+            })
+            .catch(err => {
+                console.error('[API] Sync background task failed:', err);
+            });
 
-        res.send({ success: true });
+        res.send({ success: true, message: 'Senkronizasyon başlatıldı. Tamamlandığında liste güncellenecektir.' });
     } catch (err) {
-        console.error('[API] Failed to leave group:', err);
+        console.error('[API] Sync failed:', err);
         res.status(500).send({ error: err.message });
     }
 });
@@ -75,6 +83,15 @@ db.client
 
         // Start/Restart if status is 'scanning'
         if (newRec.status === 'scanning') {
+            // PREVENTION OF INFINITE LOOP (ROBUST):
+            // If the record has a QR code, it means the bot successfully generated it and updated the DB.
+            // In this case, the session is ALREADY running and doing its job.
+            // The listener should ONLY intervene if the user requested a NEW session (which sets qr_code to NULL).
+            if (newRec.qr_code) {
+                // console.log(`[DB Listener] Ignoring QR update for ${userId} - Session is active.`);
+                return;
+            }
+
             const currentSession = bot.getSession(userId);
             // If we are 'scanning', it implies we WANT a new QR.
             // Even if a session exists in memory, we should probably kill it and start fresh 
@@ -86,19 +103,32 @@ db.client
             // 3. If no session -> Start New.
             
             if (currentSession) {
-                if (currentSession.sock && currentSession.sock.user) {
+                if (currentSession.user) {
                      // It's connected but DB says 'scanning'. User wants to switch/re-scan?
                      console.log(`[DB Listener] Force restarting session for ${userId} (Requested New QR)`);
                      await bot.stopSession(userId);
-                     await bot.startSession(userId, true); // true = force clear
-                } else if (!currentSession.sock && !currentSession.qrCode) {
-                     // Not running?
-                     await bot.startSession(userId, true);
+                     await bot.startSession(userId, io); // true = force clear
+                } else {
+                     // Not running or strictly scanning?
+                     // If we are already running (currentSession exists), we might just let it be.
+                     // But if the user explicitly clicked "Start" (which sets status=scanning), 
+                     // and we are stuck, maybe restart.
+                     // For now, let's restart to be safe if requested.
+                     console.log(`[DB Listener] Restarting session for ${userId}`);
+                     await bot.stopSession(userId);
+                     await bot.startSession(userId, io);
                 }
             } else {
                 console.log(`[DB Listener] Starting new session for ${userId}`);
-                await bot.startSession(userId, true); // Force clear to ensure fresh QR
+                await bot.startSession(userId, io); // Force clear to ensure fresh QR
             }
+        } else if (newRec.status === 'connected') {
+             // If DB says connected, but we don't have it in memory (e.g. after server restart + race condition), load it.
+             const currentSession = bot.getSession(userId);
+             if (!currentSession) {
+                  console.log(`[DB Listener] DB says connected but session missing. Loading ${userId}...`);
+                  await bot.startSession(userId, io);
+             }
         }
 
         // Stop if disconnected
@@ -133,7 +163,7 @@ db.client
              const allSessions = bot.getAllSessions();
              for (const userId of allSessions) {
                  const session = bot.getSession(userId);
-                 if (session && session.sock) {
+                 if (session) {
                      try {
                          // Check if this session is part of the group
                          // But we don't know if this group belongs to this session easily without querying WA.
@@ -163,7 +193,7 @@ db.client
             const ownerId = group.created_by;
             const manager = bot.getSession(ownerId);
 
-            if (manager && manager.sock?.user) {
+            if (manager && manager.user) {
                 console.log(`[Group Action] Creating group '${group.name}' for user ${ownerId}`);
                 try {
                     // Create group on WA (empty participants initially)
@@ -189,8 +219,8 @@ db.client
                             .eq('id', group.id);
 
                         // --- AUTO SYNC OWNER TO MEMBERS LIST ---
-                        if (manager.sock?.user?.id) {
-                            const ownerPhone = manager.sock.user.id.split(':')[0];
+                        if (manager.user?.id) {
+                            const ownerPhone = manager.user.id.split(':')[0];
                             console.log(`[Group Action] Adding owner ${ownerPhone} to members list for ${res.gid}`);
                             await db.client.from('chat_group_members').insert({
                                 group_id: group.id,
@@ -236,32 +266,61 @@ db.client
                         sessionUserId = group.created_by;
                         console.log(`[DB Listener] Routing message through group owner session: ${sessionUserId}`);
                     }
+                } else {
+                     // NEW: Direct Message Fallback Logic
+                     // If msg.group_id is null (unlikely for groups, but possible for direct chats if implemented later),
+                     // we stick to msg.user_id.
                 }
 
                 let session = bot.getSession(sessionUserId);
                 
-                // --- ON-DEMAND SESSION START ---
-                if (!session) {
-                    console.log(`[DB Listener] Session not found in memory for ${sessionUserId}. Checking DB status...`);
-                    const dbSession = await db.getSession(sessionUserId);
-                    if (dbSession && dbSession.status === 'connected') {
-                        console.log(`[DB Listener] DB says connected. Waking up session for ${sessionUserId}...`);
-                        session = await bot.startSession(sessionUserId);
-                        // Wait for actual connection
-                        await session.waitForConnection();
-                    }
+                // --- FALLBACK: If group owner session not found, try the person who sent it ---
+                if (!session && msg.user_id && sessionUserId !== msg.user_id) {
+                    console.log(`[DB Listener] Owner session ${sessionUserId} not active. Falling back to sender session ${msg.user_id}`);
+                    session = bot.getSession(msg.user_id);
+                    if (session) sessionUserId = msg.user_id;
                 }
 
-                if (session && session.sock && session.connectionState === 'open') {
-                    const jid = msg.group_id || msg.sender_phone;
-                    await session.sendMessage(jid, msg.content);
-                    
-                    await db.updateMessageStatus(msg.id, 'sent');
-                    socket.emit('message_status', { id: msg.id, status: 'sent' });
+                if (session) {
+                    // Check if connection is open, if not try to wait briefly
+                    if (!session.user) {
+                        console.warn(`[DB Listener] Session ${sessionUserId} not ready. Waiting 3s...`);
+                        await new Promise(r => setTimeout(r, 3000));
+                    }
+
+                    if (session.user) {
+                        // Determine JID:
+                        // If group_id is present, we need to fetch the JID from chat_groups table again or cache it?
+                        // Wait, we only fetched 'created_by' above. We need 'group_jid' too!
+                        
+                        let jid = msg.sender_phone; // Fallback? No, this is wrong.
+                        
+                        if (msg.group_id) {
+                            const { data: groupJidData } = await db.client
+                                .from('chat_groups')
+                                .select('group_jid')
+                                .eq('id', msg.group_id)
+                                .single();
+                                
+                            if (groupJidData && groupJidData.group_jid) {
+                                jid = groupJidData.group_jid;
+                            } else {
+                                throw new Error(`Could not find Group JID for group_id: ${msg.group_id}`);
+                            }
+                        }
+                        
+                        console.log(`[DB Listener] Sending to JID: ${jid}`);
+                        await session.sendMessage(jid, { text: msg.content }); // Fixed: sendMessage content format
+                        
+                        await db.updateMessageStatus(msg.id, 'sent');
+                        socket.emit('message_status', { id: msg.id, status: 'sent' });
+                    } else {
+                         throw new Error(`Session ${sessionUserId} not connected after wait.`);
+                    }
                 } else {
                     console.log(`[DB Listener] No active session for ${sessionUserId}`);
                     // Optional: mark as failed if session not found
-                    // await db.updateMessageStatus(msg.id, 'failed');
+                     await db.updateMessageStatus(msg.id, 'failed');
                 }
             } catch (err) {
                 console.error('Failed to send message:', err);
@@ -292,7 +351,7 @@ db.client
         if (!group || !group.group_jid || !group.is_whatsapp_group) return;
 
         const session = bot.getSession(group.created_by);
-        if (!session || !session.sock) return;
+        if (!session) return;
 
         try {
             if (eventType === 'INSERT') {
@@ -329,7 +388,7 @@ async function autoLoadSessions() {
             console.log(`[Bot] Auto-loading ${sessions.length} sessions...`);
             for (const s of sessions) {
                 // We don't await so they load in parallel
-                bot.startSession(s.user_id).catch(err => {
+                bot.startSession(s.user_id, io).catch(err => {
                     console.error(`[Bot] Failed to auto-load session for ${s.user_id}:`, err.message);
                 });
             }

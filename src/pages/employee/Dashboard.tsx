@@ -25,10 +25,28 @@ export default function EmployeeDashboard() {
   });
 
   useEffect(() => {
-    fetchStats();
+    let isMounted = true;
+    const controller = new AbortController();
+
+    const loadStats = async () => {
+      if (!user) return;
+      
+      try {
+        await fetchStats(isMounted);
+      } catch (err) {
+        if (isMounted) console.error(err);
+      }
+    };
+
+    loadStats();
+
+    return () => {
+      isMounted = false;
+      controller.abort();
+    };
   }, [user, dateRange]);
 
-  const fetchStats = async () => {
+  const fetchStats = async (isMounted: boolean) => {
     if (!user) return;
 
     try {
@@ -39,7 +57,7 @@ export default function EmployeeDashboard() {
       let quotesQuery = supabase
         .from('teklifler')
         .select('*', { count: 'exact', head: true })
-        .eq('kesen_id', user.id); // Fixed: kesen -> kesen_id
+        .eq('employee_id', user.id); 
 
       // Apply date filter ONLY if dates are valid
       if (startStr && endStr) {
@@ -50,8 +68,12 @@ export default function EmployeeDashboard() {
       
       const { count: quotesCount, error: quotesError } = await quotesQuery;
       
+      if (!isMounted) return;
+
       if (quotesError) {
-          console.error('Error fetching quotes stats:', quotesError);
+          if (quotesError.message !== 'FetchError: The user aborted a request.') {
+              console.error('Error fetching quotes stats:', quotesError);
+          }
       }
 
       const adjustedEndStr = new Date(dateRange.to.setHours(23, 59, 59, 999)).toISOString();
@@ -60,7 +82,7 @@ export default function EmployeeDashboard() {
       let quotesFinalQuery = supabase
         .from('teklifler')
         .select('*', { count: 'exact', head: true })
-        .eq('kesen_id', user.id); // Fixed: kesen -> kesen_id
+        .eq('employee_id', user.id);
         
       if (startStr && adjustedEndStr) {
           quotesFinalQuery = quotesFinalQuery
@@ -70,15 +92,19 @@ export default function EmployeeDashboard() {
 
       const { count: quotesCountFinal, error: quotesFinalError } = await quotesFinalQuery;
       
+      if (!isMounted) return;
+
       if (quotesFinalError) {
-           console.error('Error fetching quotes stats final:', quotesFinalError);
+           if (quotesFinalError.message !== 'FetchError: The user aborted a request.') {
+               console.error('Error fetching quotes stats final:', quotesFinalError);
+           }
       }
 
       // 2. Active Policies (Poliçeler) - Sales in range
       let policiesQuery = supabase
         .from('policeler')
         .select('net_prim, komisyon')
-        .eq('kesen_id', user.id); // Fixed: kesen -> kesen_id
+        .eq('employee_id', user.id);
 
       if (startStr && adjustedEndStr) {
           policiesQuery = policiesQuery
@@ -88,8 +114,12 @@ export default function EmployeeDashboard() {
 
       const { data: policiesData, error: policiesError } = await policiesQuery;
       
+      if (!isMounted) return;
+
       if (policiesError) {
-           console.error('Error fetching policies stats:', policiesError);
+           if (policiesError.message !== 'FetchError: The user aborted a request.') {
+               console.error('Error fetching policies stats:', policiesError);
+           }
       }
 
       const totalPrem = policiesData?.reduce((acc, curr) => acc + (curr.net_prim || 0), 0) || 0;
@@ -99,10 +129,12 @@ export default function EmployeeDashboard() {
       const { count: expiringCount, error: expiringError } = await supabase
         .from('policeler')
         .select('*', { count: 'exact', head: true })
-        .eq('kesen_id', user.id) // Fixed: kesen -> kesen_id
-        .gte('tarih', new Date().toISOString()) // Expiry check on 'tarih' (End Date)
+        .eq('employee_id', user.id)
+        .gte('tarih', new Date().toISOString())
         .lte('tarih', new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString());
         
+      if (!isMounted) return;
+
       if (expiringError) {
            console.error('Error fetching expiring stats:', expiringError);
       }
@@ -117,7 +149,7 @@ export default function EmployeeDashboard() {
       });
 
     } catch (error) {
-      console.error('Error fetching dashboard stats:', error);
+      if (isMounted) console.error('Error fetching dashboard stats:', error);
     }
   };
 

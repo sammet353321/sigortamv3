@@ -66,12 +66,12 @@ export default function EmployeeQuotesPage() {
       
       let query = supabase
         .from('teklifler')
-        .select('*, ilgili_kisi:users!ilgili_kisi_id(name), kesen:users!kesen_id(name)')
-        .order('guncellenme_tarihi', { ascending: false });
+        .select('*')
+        .order('tarih', { ascending: false });
 
       // Employee Filter
       if (user?.role === 'employee' || user?.role === 'sub_agent') {
-          query = query.eq('kesen_id', user.id);
+          query = query.eq('employee_id', user.id);
       }
 
       if (selectedMonth !== 0) {

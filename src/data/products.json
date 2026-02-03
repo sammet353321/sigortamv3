@@ -1,0 +1,182 @@
+[
+  {
+    "id": "trafik",
+    "title": "Zorunlu Trafik Sigortası",
+    "shortDescription": "Aracınızla karşı tarafa verebileceğiniz zararları güvence altına alır.",
+    "longDescription": "Karayolları Trafik Kanunu uyarınca yapılması zorunlu olan, herhangi bir kaza durumunda karşı tarafa verilebilecek maddi ve bedeni zararları karşılayan sigorta türüdür. Kendi aracınızın hasarını karşılamaz, sadece 3. şahıslara verilen zararları öder.",
+    "icon": "Car",
+    "requiredFields": ["plaka", "tcNo", "ruhsatSeriNo"],
+    "defaults": { "coverageLimit": 200000, "currency": "TRY" },
+    "examples": {
+      "coverage": "Karşı araç hasarı, sağlık giderleri, sakatlanma ve ölüm tazminatı."
+    }
+  },
+  {
+    "id": "kasko",
+    "title": "Kasko Sigortası",
+    "shortDescription": "Aracınızı çarpma, çalınma, yanma ve doğal afetlere karşı korur.",
+    "longDescription": "Aracınızın uğrayabileceği çarpma, çarpılma, yanma, çalınma ve hırsızlık girişimi gibi risklere karşı maddi güvence sağlayan sigorta türüdür. İsteğe bağlı olarak cam kırılması, doğal afetler, terör ve kemirgen hayvan zararları da eklenebilir.",
+    "icon": "Shield",
+    "requiredFields": ["plaka", "modelYili", "marka", "model"],
+    "defaults": { "coverageType": "full", "assistance": true },
+    "examples": {
+      "coverage": "Çarpma, çalınma, sel, deprem, anahtar kaybı, ikame araç."
+    }
+  },
+  {
+    "id": "saglik",
+    "title": "Bireysel Sağlık Sigortası",
+    "shortDescription": "Özel hastanelerde ayakta ve yatarak tedavi masraflarınızı karşılar.",
+    "longDescription": "Hastalık veya kaza sonucunda oluşabilecek sağlık giderlerinizi, anlaşmalı özel sağlık kurumlarında bütçenizi zorlamadan karşılamanızı sağlar. Yatarak tedavi (ameliyat, oda-yemek) ve ayakta tedavi (doktor, ilaç, tahlil) teminatlarını içerebilir.",
+    "icon": "Heart",
+    "requiredFields": ["yas", "tcNo", "cinsiyet", "il"],
+    "defaults": { "planType": "gold", "inpatient": true, "outpatient": true },
+    "examples": {
+      "coverage": "Ameliyat, yoğun bakım, doktor muayenesi, fizik tedavi, doğum."
+    }
+  },
+  {
+    "id": "konut",
+    "title": "Konut Sigortası",
+    "shortDescription": "Evinizi ve eşyalarınızı yangın, hırsızlık ve su baskınına karşı korur.",
+    "longDescription": "Evinizi (bina) ve içindeki eşyaları yangın, hırsızlık, su baskını, fırtına gibi risklere karşı korur. Ayrıca komşulara verebileceğiniz zararları (Mali Mesuliyet) da kapsayabilir.",
+    "icon": "Home",
+    "requiredFields": ["il", "ilce", "metrekare", "binaYasi", "esyaBedeli"],
+    "defaults": { "buildingCoverage": true, "contentCoverage": true },
+    "examples": {
+      "coverage": "Yangın, hırsızlık, su basması, cam kırılması, elektronik cihaz."
+    }
+  },
+  {
+    "id": "dask",
+    "title": "DASK (Zorunlu Deprem)",
+    "shortDescription": "Binanızın deprem ve deprem kaynaklı hasarlarını karşılar.",
+    "longDescription": "Deprem ve deprem sonucu meydana gelen yangın, infilak, tsunami ve yer kaymasının doğrudan neden olacağı maddi zararları, poliçenizde belirtilen limitler dahilinde nakit olarak karşılar. Tapu işlemleri ve elektrik/su abonelikleri için zorunludur.",
+    "icon": "Activity",
+    "requiredFields": ["adresKodu", "il", "ilce", "tcNo", "binaYapiTarzi"],
+    "defaults": { "isMandatory": true },
+    "examples": {
+      "coverage": "Deprem kaynaklı bina hasarı (temel, duvarlar, tavanlar, merdivenler)."
+    }
+  },
+  {
+    "id": "isyeri",
+    "title": "İşyeri Sigortası",
+    "shortDescription": "İşyerinizi, demirbaşlarınızı ve ticari mallarınızı risklere karşı korur.",
+    "longDescription": "İşyeri binası, demirbaşlar, makineler, elektronik cihazlar ve emtiaları; yangın, hırsızlık, sel, grev, lokavt gibi risklere karşı korur. İş durması kaybı ve kira kaybı gibi ek teminatlar da alınabilir.",
+    "icon": "Briefcase",
+    "requiredFields": ["faaliyetAlani", "calisanSayisi", "il", "demirbasBedeli"],
+    "defaults": { "liabilityCoverage": true },
+    "examples": {
+      "coverage": "Yangın, hırsızlık, iş durması, cam kırılması, 3. şahıs mali mesuliyet."
+    }
+  },
+  {
+    "id": "seyahat",
+    "title": "Seyahat Sigortası",
+    "shortDescription": "Yurt içi ve yurt dışı seyahatlerinizde sağlık ve bagaj risklerini kapsar.",
+    "longDescription": "Seyahat sırasında yaşanabilecek hastalık, kaza, bagaj kaybı/gecikmesi ve seyahat iptali gibi riskleri güvence altına alır. Özellikle Schengen vizesi başvurularında zorunludur (30.000 Euro teminatlı).",
+    "icon": "Plane",
+    "requiredFields": ["gidilecekUlke", "seyahatTarihi", "yas"],
+    "defaults": { "region": "europe", "days": 7 },
+    "examples": {
+      "coverage": "Tıbbi tedavi, nakil, bagaj kaybı, seyahat iptali."
+    }
+  },
+  {
+    "id": "ferdi-kaza",
+    "title": "Ferdi Kaza Sigortası",
+    "shortDescription": "Beklenmedik kazalara karşı sizi ve sevdiklerinizi maddi güvenceye alır.",
+    "longDescription": "Sigortalının iradesi dışında meydana gelen ani ve harici bir olay neticesinde ölmesi veya sakat kalması risklerine karşı teminat sunar.",
+    "icon": "AlertTriangle",
+    "requiredFields": ["meslek", "yas", "teminatTutari"],
+    "defaults": { "deathBenefit": 100000, "disabilityBenefit": 100000 },
+    "examples": {
+      "coverage": "Vefat tazminatı, daimi sakatlık tazminatı, tedavi masrafları."
+    }
+  },
+  {
+    "id": "nakliyat",
+    "title": "Nakliyat Sigortası",
+    "shortDescription": "Yüklerinizin taşınma sırasında uğrayabileceği hasarları teminat altına alır.",
+    "longDescription": "Malların bir yerden başka bir yere taşınması sırasında (kara, hava, deniz, demiryolu) uğrayabileceği hasar ve kayıpları güvence altına alır. Emtia Nakliyat Sigortası olarak da bilinir.",
+    "icon": "Truck",
+    "requiredFields": ["yukCinsi", "tasimaSekli", "baslangicBitis", "yukBedeli"],
+    "defaults": { "transportMode": "road" },
+    "examples": {
+      "coverage": "Kaza sonucu hasar, hırsızlık, yükleme/boşaltma hasarları."
+    }
+  },
+  {
+    "id": "mesleki-sorumluluk",
+    "title": "Mesleki Sorumluluk Sigortası",
+    "shortDescription": "Mesleki hatalarınızdan doğan tazminat taleplerini karşılar.",
+    "longDescription": "Doktor, avukat, mimar, mühendis, mali müşavir gibi meslek sahiplerinin, mesleki faaliyetleri sırasında yaptıkları hatalar veya ihmaller nedeniyle üçüncü şahıslara verebilecekleri zararları karşılar.",
+    "icon": "Scale",
+    "requiredFields": ["meslek", "yillikCiro", "calisanSayisi"],
+    "defaults": { "retroactiveDate": "inception" },
+    "examples": {
+      "coverage": "Tazminat ödemeleri, yargılama masrafları, savunma giderleri."
+    }
+  },
+  {
+    "id": "hukuksal-koruma",
+    "title": "Hukuksal Koruma Sigortası",
+    "shortDescription": "Hukuki uyuşmazlıklarda dava ve avukatlık masraflarını karşılar.",
+    "longDescription": "Taraf olduğunuz hukuksal uyuşmazlıkların giderilmesi sırasında karşılaşacağınız dava, avukatlık, icra ve danışmanlık masraflarını teminat altına alır.",
+    "icon": "Scale",
+    "requiredFields": ["tcNo", "il"],
+    "defaults": { "limit": 20000 },
+    "examples": {
+      "coverage": "Dava masrafları, avukatlık ücreti, hakem ücretleri."
+    }
+  },
+  {
+    "id": "deniz-marine",
+    "title": "Tekne / Yat Sigortası",
+    "shortDescription": "Özel veya ticari teknelerinizi denizde karşılaşabileceği risklere karşı korur.",
+    "longDescription": "Teknenin gövdesi, makineleri ve ekipmanlarını; batma, çarpma, yangın, fırtına, hırsızlık gibi risklere karşı korur. Ayrıca 3. şahıslara verilecek zararları da kapsar.",
+    "icon": "Anchor",
+    "requiredFields": ["tekneAdi", "tekneBoyu", "tekneTipi", "insaYili"],
+    "defaults": { "coverage": "institute-yacht-clauses" },
+    "examples": {
+      "coverage": "Gövde hasarı, makine arızası, kurtarma masrafları, 3. şahıs mali mesuliyet."
+    }
+  },
+  {
+    "id": "hayat",
+    "title": "Hayat Sigortası",
+    "shortDescription": "Vefat veya maluliyet durumunda sevdiklerinize finansal güvence sağlar.",
+    "longDescription": "Sigortalının vefatı halinde lehtarlara, maluliyeti halinde kendisine toplu para ödemesi yapan sigorta türüdür. Kredi Hayat Sigortası gibi türleri de vardır.",
+    "icon": "Heart",
+    "requiredFields": ["yas", "meslek", "sigortaSuresi", "teminatTutari"],
+    "defaults": { "term": "1-year-renewable" },
+    "examples": {
+      "coverage": "Vefat teminatı, kaza sonucu vefat, maluliyet."
+    }
+  },
+  {
+    "id": "bes",
+    "title": "Bireysel Emeklilik (BES)",
+    "shortDescription": "Emeklilik döneminizde ek gelir sağlamak için bugünden birikim yapmanızı sağlar.",
+    "longDescription": "Düzenli tasarruflarınızın yatırıma yönlendirilerek emeklilik döneminde ek gelir sağladığı, %30 devlet katkısı ile desteklenen sistemdir.",
+    "icon": "Briefcase",
+    "requiredFields": ["yas", "aylikKatkiPayi"],
+    "defaults": { "governmentContribution": 30 },
+    "examples": {
+      "coverage": "Emeklilik birikimi, devlet katkısı, fon getirisi."
+    }
+  },
+  {
+    "id": "tarim",
+    "title": "Tarım Sigortaları (TARSİM)",
+    "shortDescription": "Tarımsal ürünlerinizi ve hayvanlarınızı doğal afetlere karşı korur.",
+    "longDescription": "Devlet destekli tarım sigortaları ile bitkisel ürünler, seralar, büyükbaş/küçükbaş hayvanlar, kümes hayvanları ve su ürünleri; dolu, don, fırtına, sel gibi risklere karşı güvence altına alınır.",
+    "icon": "Home",
+    "requiredFields": ["il", "ilce", "urun", "araziBüyüklüğü"],
+    "defaults": { "stateSubsidy": 50 },
+    "examples": {
+      "coverage": "Dolu, don, fırtına, sel, heyelan, yangın."
+    }
+  }
+]

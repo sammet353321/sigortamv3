@@ -20,7 +20,9 @@ export default function EmployeeGroupsManagement() {
     const [loading, setLoading] = useState(true);
     const [newGroupName, setNewGroupName] = useState('');
     const [selectedGroup, setSelectedGroup] = useState<EmployeeGroup | null>(null);
-    const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null); // Added missing state
+    // Custom Delete Modal State
+    const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+    const [groupToDelete, setGroupToDelete] = useState<string | null>(null);
 
     useEffect(() => {
         fetchGroups();
@@ -38,8 +40,10 @@ export default function EmployeeGroupsManagement() {
                 ...g,
                 member_count: g.employee_group_members?.[0]?.count || 0
             })) || []);
-        } catch (error) {
+        } catch (error: any) {
             console.error('Error fetching employee groups:', error);
+            // Show toast to user so they know something is wrong
+            toast.error(`Gruplar yüklenemedi: ${error.message || 'Bilinmeyen hata'}`);
         } finally {
             setLoading(false);
         }
@@ -54,27 +58,70 @@ export default function EmployeeGroupsManagement() {
             if (error) throw error;
             setNewGroupName('');
             fetchGroups();
+            toast.success('Grup başarıyla oluşturuldu.');
         } catch (error) {
             console.error('Error adding group:', error);
-            alert('Grup eklenirken hata oluştu.');
+            toast.error('Grup eklenirken hata oluştu.');
         }
     }
 
-    async function handleDeleteGroup(id: string) {
-        if (!confirm('Bu grubu ve tüm üyelerini silmek istediğinize emin misiniz?')) return;
+    async function confirmDeleteGroup() {
+        if (!groupToDelete) return;
 
         try {
-            const { error } = await supabase.from('employee_groups').delete().eq('id', id);
+            const { error } = await supabase.from('employee_groups').delete().eq('id', groupToDelete);
             if (error) throw error;
-            fetchGroups();
-            if (selectedGroup?.id === id) setSelectedGroup(null);
+            
+            setGroups(prev => prev.filter(g => g.id !== groupToDelete));
+            if (selectedGroup?.id === groupToDelete) setSelectedGroup(null);
+            
+            toast.success('Grup ve üyeleri silindi.');
         } catch (error) {
             console.error('Error deleting group:', error);
+            toast.error('Silme işlemi başarısız.');
+        } finally {
+            setIsDeleteModalOpen(false);
+            setGroupToDelete(null);
         }
+    }
+
+    function handleDeleteClick(id: string) {
+        setGroupToDelete(id);
+        setIsDeleteModalOpen(true);
     }
 
     return (
-        <div className="space-y-6">
+        <div className="space-y-6 relative">
+            {/* Custom Delete Confirmation Modal */}
+            {isDeleteModalOpen && (
+                <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
+                    <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6 animate-in fade-in zoom-in-95 duration-200">
+                        <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mb-4 mx-auto text-red-600">
+                            <Trash2 size={24} />
+                        </div>
+                        <h3 className="text-lg font-bold text-gray-900 text-center mb-2">Grubu Sil</h3>
+                        <p className="text-gray-600 text-center mb-6">
+                            Bu grubu ve tüm üyelerini silmek istediğinize emin misiniz? <br/>
+                            <span className="text-xs text-red-500 mt-1 block font-medium">Bu işlem geri alınamaz.</span>
+                        </p>
+                        <div className="flex space-x-3">
+                            <button 
+                                onClick={() => setIsDeleteModalOpen(false)}
+                                className="flex-1 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 font-medium transition-colors"
+                            >
+                                İptal
+                            </button>
+                            <button 
+                                onClick={confirmDeleteGroup}
+                                className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 font-medium transition-colors"
+                            >
+                                Evet, Sil
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             <div className="flex justify-between items-center">
                 <h3 className="text-lg font-bold text-gray-800">Çalışan Grupları</h3>
             </div>
@@ -108,29 +155,13 @@ export default function EmployeeGroupsManagement() {
                                 <span className="text-xs text-gray-500">{group.member_count} Çalışan</span>
                             </div>
                         </div>
-                        {confirmDeleteId === group.id ? (
-                            <div className="flex items-center space-x-1" onClick={(e) => e.stopPropagation()}>
-                                <button 
-                                    onClick={() => handleDeleteGroup(group.id)}
-                                    className="p-1 px-2 bg-red-600 text-white rounded text-xs hover:bg-red-700"
-                                >
-                                    Sil
-                                </button>
-                                <button 
-                                    onClick={() => setConfirmDeleteId(null)}
-                                    className="p-1 px-2 bg-gray-200 text-gray-700 rounded text-xs hover:bg-gray-300"
-                                >
-                                    İptal
-                                </button>
-                            </div>
-                        ) : (
-                            <button 
-                                onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(group.id); }}
-                                className="text-gray-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity p-2"
-                            >
-                                <Trash2 size={18} />
-                            </button>
-                        )}
+                        {/* Delete Button */}
+                        <button 
+                            onClick={(e) => { e.stopPropagation(); handleDeleteClick(group.id); }}
+                            className="text-gray-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity p-2"
+                        >
+                            <Trash2 size={18} />
+                        </button>
                     </div>
                 ))}
                 {groups.length === 0 && (

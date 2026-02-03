@@ -16,12 +16,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     // Check active session
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    supabase.auth.getSession().then(({ data: { session }, error }) => {
+      if (error) {
+        console.error('Error getting session:', error);
+        // If there is an error (like invalid refresh token), we should clear the session
+        supabase.auth.signOut();
+        setLoading(false);
+        return;
+      }
+      
       if (session?.user) {
         fetchProfile(session.user.id);
       } else {
         setLoading(false);
       }
+    }).catch((err) => {
+      console.error('Unexpected error during session check:', err);
+      setLoading(false);
+      supabase.auth.signOut();
     });
 
     // Listen for changes
@@ -56,14 +68,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setUser(null);
       }
     } catch (error) {
-      console.error('Error fetching profile:', error);
+      console.warn('Error fetching profile:', error);
+      // Don't sign out immediately on network error, just let it fail gracefully
     } finally {
       setLoading(false);
     }
   }
 
   async function signOut() {
-    await supabase.auth.signOut();
+    try {
+      await supabase.auth.signOut();
+    } catch (error) {
+      console.warn('Error during sign out:', error);
+      // Even if network fails, we should clear local state
+    } finally {
+      setUser(null);
+      // Manually clear local storage if supabase fails to clean up due to network
+      // This is a safety measure
+      localStorage.removeItem('sb-aqubbkxsfwmhfbolkfah-auth-token');
+    }
   }
 
   return (

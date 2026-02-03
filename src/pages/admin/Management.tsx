@@ -13,7 +13,7 @@ interface Company {
 }
 
 export default function ManagementPage() {
-    const [activeTab, setActiveTab] = useState<'users' | 'chat-groups' | 'employee-groups' | 'settings'>('users');
+    const [activeTab, setActiveTab] = useState<'users' | 'chat-groups' | 'employee-groups' | 'settings' | 'companies'>('users');
 
     return (
         <div className="space-y-6">

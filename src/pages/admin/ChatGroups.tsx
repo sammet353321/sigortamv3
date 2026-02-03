@@ -41,10 +41,35 @@ export default function ChatGroupsManagement() {
     const [checkingStatus, setCheckingStatus] = useState(true);
 
     useEffect(() => {
-        checkStatusAndFetch();
+        // ONLY Check connection status on mount, DO NOT fetch groups automatically if already connected
+        checkStatus();
+
+        // Listen for Sync Completion (via Session Update)
+        const setupRealtime = async () => {
+            const { data: { user } } = await supabase.auth.getUser();
+            if (!user) return;
+
+            const channel = supabase
+               .channel(`chat-groups-sync-${user.id}`)
+               .on('postgres_changes', {
+                   event: 'UPDATE',
+                   schema: 'public',
+                   table: 'whatsapp_sessions',
+                   filter: `user_id=eq.${user.id}`
+               }, () => {
+                   // When session updates (sync complete), refresh groups
+                   console.log('Session updated, refreshing groups...');
+                   fetchGroups();
+                   toast.success('Senkronizasyon tamamlandı!');
+               })
+               .subscribe();
+
+            return () => { supabase.removeChannel(channel); };
+        };
+        setupRealtime();
     }, []);
 
-    async function checkStatusAndFetch() {
+    async function checkStatus() {
         setCheckingStatus(true);
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return;
@@ -60,9 +85,9 @@ export default function ChatGroupsManagement() {
         setIsWAConnected(connected);
         if (data?.phone_number) setMyPhone(data.phone_number);
 
-        // 2. If connected, fetch groups
+        // 2. If connected, fetch groups ONCE
         if (connected) {
-            await fetchGroups();
+             await fetchGroups();
         } else {
             setGroups([]); // Clear groups if not connected
             setLoading(false);
@@ -78,15 +103,20 @@ export default function ChatGroupsManagement() {
 
             const { data, error } = await supabase
                 .from('chat_groups')
-                .select('*, chat_group_members(count)')
-                .eq('created_by', user.id) // Filter to only show groups owned/synced by this admin
+                .select(`
+                    *, 
+                    assigned_employee_group:employee_groups (
+                        id,
+                        employee_group_members (count)
+                    )
+                `)
                 .order('created_at', { ascending: false });
             
             if (error) throw error;
             
             setGroups(data?.map(g => ({
                 ...g,
-                member_count: g.chat_group_members?.[0]?.count || 0
+                member_count: g.assigned_employee_group?.employee_group_members?.[0]?.count || 0
             })) || []);
         } catch (error) {
             console.error('Error fetching groups:', error);
@@ -135,32 +165,18 @@ export default function ChatGroupsManagement() {
             const { data: { user } } = await supabase.auth.getUser();
             if (!user) throw new Error('Oturum açılmamış.');
 
-            // 1. Call Backend API to Leave & Delete
-            // If it's a real WA group and we have the JID, call the API
-            if (group.is_whatsapp_group && group.group_jid) {
-                const response = await fetch('http://localhost:3004/groups/leave', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        userId: user.id, 
-                        groupJid: group.group_jid 
-                    })
-                });
-                
-                if (!response.ok) {
-                    const err = await response.json();
-                    console.warn('API delete failed, trying direct DB delete...', err);
-                    // Fallback to direct DB delete if API fails (e.g. backend offline)
-                    throw new Error(err.error || 'API Hatası');
-                }
-            } else {
-                // If not a WA group or no JID, just delete from DB directly
-                const { error } = await supabase
-                    .from('chat_groups')
-                    .delete()
-                    .eq('id', groupToDelete);
-                if (error) throw error;
+            // --- DISABLED WA GROUP DELETION ---
+            if (group.is_whatsapp_group) {
+                toast.error('WhatsApp grupları silinemez. Sadece panelden manuel eklenen gruplar silinebilir.');
+                return;
             }
+
+            // Only delete from DB directly for manual groups
+            const { error } = await supabase
+                .from('chat_groups')
+                .delete()
+                .eq('id', groupToDelete);
+            if (error) throw error;
 
             // 2. Remove from UI
             setGroups(prev => prev.filter(g => g.id !== groupToDelete));
@@ -170,15 +186,7 @@ export default function ChatGroupsManagement() {
 
         } catch (error) {
             console.error('Error deleting group:', error);
-            // Fallback: If API failed, try Force Delete from DB anyway
-            try {
-                 await supabase.from('chat_groups').delete().eq('id', groupToDelete);
-                 setGroups(prev => prev.filter(g => g.id !== groupToDelete));
-                 if (selectedGroup?.id === groupToDelete) setSelectedGroup(null);
-                 toast.success('Grup veritabanından silindi (WhatsApp bağlantısı kontrol edilemedi).');
-            } catch (dbError) {
-                 toast.error('Silme işlemi başarısız.');
-            }
+            toast.error('Silme işlemi başarısız.');
         } finally {
             setIsDeleteModalOpen(false);
             setGroupToDelete(null);
@@ -188,6 +196,39 @@ export default function ChatGroupsManagement() {
     function handleDeleteClick(id: string) {
         setGroupToDelete(id);
         setIsDeleteModalOpen(true);
+    }
+
+    async function handleSyncGroups() {
+        setLoading(true);
+        try {
+            const { data: { user } } = await supabase.auth.getUser();
+            if (!user) return;
+
+            // 1. Call Backend API to Force Sync
+            // Using hostname to support remote access if configured
+            const response = await fetch(`http://${window.location.hostname}:3004/groups/sync`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userId: user.id })
+            });
+
+            if (!response.ok) {
+                const err = await response.json();
+                throw new Error(err.error || 'Senkronizasyon hatası');
+            }
+
+            const result = await response.json();
+            toast.success(result.message || 'Senkronizasyon başladı.');
+            
+            // 2. Refresh UI immediately to show current state
+            await fetchGroups();
+
+        } catch (error: any) {
+            console.error('Sync Error:', error);
+            toast.error(error.message || 'Senkronizasyon başarısız oldu.');
+        } finally {
+            setLoading(false);
+        }
     }
 
     return (
@@ -202,7 +243,15 @@ export default function ChatGroupsManagement() {
                         <h3 className="text-lg font-bold text-gray-900 text-center mb-2">Grubu Sil</h3>
                         <p className="text-gray-600 text-center mb-6">
                             Bu grubu silmek istediğinize emin misiniz? <br/>
-                            <span className="text-xs text-red-500 mt-1 block font-medium">Dikkat: Bu işlem grubu panelden silecek ve bağlı WhatsApp hesabınız bu gruptan çıkacaktır.</span>
+                            {groupToDelete && groups.find(g => g.id === groupToDelete)?.is_whatsapp_group ? (
+                                <span className="text-xs text-blue-600 mt-2 block font-medium bg-blue-50 p-2 rounded">
+                                    Güvenlik sebebiyle bu işlem grubu <b>sadece panelden siler</b>.<br/> 
+                                    WhatsApp grubunuz ve üyeleriniz <b>silinmez</b>.<br/>
+                                    İstediğiniz zaman tekrar senkronize edebilirsiniz.
+                                </span>
+                            ) : (
+                                <span className="text-xs text-red-500 mt-1 block font-medium">Bu işlem geri alınamaz.</span>
+                            )}
                         </p>
                         <div className="flex space-x-3">
                             <button 
@@ -237,7 +286,27 @@ export default function ChatGroupsManagement() {
                     )}
                     <div className="text-sm text-gray-500">
                         {checkingStatus ? 'Durum kontrol ediliyor...' : 
-                         isWAConnected ? 'WhatsApp Senkronize Edildi' : 'WhatsApp Bağlantısı Bekleniyor'}
+                         isWAConnected ? (
+                            <div className="flex items-center gap-2">
+                                <span className="text-green-600 font-medium flex items-center">
+                                    <span className="w-2 h-2 bg-green-500 rounded-full mr-1 animate-pulse"></span>
+                                    WhatsApp Bağlı
+                                </span>
+                                <div className="flex flex-col items-end">
+                                    <button 
+                                        onClick={handleSyncGroups}
+                                        disabled={loading}
+                                        className="bg-blue-600 text-white px-3 py-1 rounded text-xs font-bold hover:bg-blue-700 transition-colors flex items-center gap-1"
+                                    >
+                                        <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
+                                        Grupları Getir
+                                    </button>
+                                    <span className="text-[10px] text-gray-500 mt-1">
+                                        Toplam: {groups.length} Grup
+                                    </span>
+                                </div>
+                            </div>
+                         ) : 'WhatsApp Bağlantısı Bekleniyor'}
                     </div>
                 </div>
             </div>
@@ -286,18 +355,33 @@ export default function ChatGroupsManagement() {
                                 </div>
                                 <div>
                                     <span className="font-medium text-gray-800 block">{group.name}</span>
-                                    <div className="flex items-center space-x-2">
-                                        <span className="text-xs text-gray-500">{group.member_count} Üye</span>
-                                        {group.is_whatsapp_group && <span className="text-[10px] bg-green-100 text-green-700 px-1 rounded">WA</span>}
+                                    <div className="flex flex-col space-y-1 mt-1">
+                                        <div className="flex flex-col">
+                                            <span className="text-xs text-gray-500">Atanan Grup Sayısı:</span>
+                                            <span className="text-sm font-semibold text-blue-600">
+                                                {group.assigned_employee_group_id ? 1 : 0}
+                                            </span>
+                                        </div>
+                                        {group.is_whatsapp_group && <span className="text-[10px] bg-green-100 text-green-700 px-1 rounded w-fit mt-1">WA</span>}
                                     </div>
                                 </div>
                             </div>
-                            <button 
-                                onClick={(e) => { e.stopPropagation(); handleDeleteClick(group.id); }}
-                                className="text-gray-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity p-2"
-                            >
-                                <Trash2 size={18} />
-                            </button>
+                            {!group.is_whatsapp_group ? (
+                                <button 
+                                    onClick={(e) => { e.stopPropagation(); handleDeleteClick(group.id); }}
+                                    className="text-gray-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity p-2"
+                                >
+                                    <Trash2 size={18} />
+                                </button>
+                            ) : (
+                                <button 
+                                    onClick={(e) => { e.stopPropagation(); handleDeleteClick(group.id); }}
+                                    className="text-gray-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity p-2"
+                                    title="Panelden Kaldır"
+                                >
+                                    <Trash2 size={18} />
+                                </button>
+                            )}
                         </div>
                     ))}
                     {groups.length === 0 && (
@@ -322,7 +406,6 @@ export default function ChatGroupsManagement() {
 }
 
 function GroupDetailModal({ group, myPhone, onClose }: { group: ChatGroup; myPhone: string | null; onClose: () => void }) {
-    const [activeTab, setActiveTab] = useState<'members' | 'permissions'>('members');
     
     return (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
@@ -336,21 +419,19 @@ function GroupDetailModal({ group, myPhone, onClose }: { group: ChatGroup; myPho
                 
                 <div className="flex border-b border-gray-200">
                     <button 
-                        onClick={() => setActiveTab('members')}
-                        className={`flex-1 py-3 text-sm font-medium ${activeTab === 'members' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
+                        className="flex-1 py-3 text-sm font-medium text-blue-600 border-b-2 border-blue-600"
                     >
-                        Üyeler (Telefonlar)
-                    </button>
-                    <button 
-                        onClick={() => setActiveTab('permissions')}
-                        className={`flex-1 py-3 text-sm font-medium ${activeTab === 'permissions' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
-                    >
-                        Yetkiler (Çalışanlar)
+                        Yetkiler (Atanan Çalışanlar)
                     </button>
                 </div>
                 
                 <div className="flex-1 overflow-y-auto p-4">
-                    {activeTab === 'members' ? <GroupMembers group={group} myPhone={myPhone} /> : <GroupPermissions group={group} onUpdate={() => {}} />}
+                    <GroupPermissions 
+                        group={group} 
+                        onUpdate={() => {
+                             // Optional: If we want to do something inside modal when updated
+                        }} 
+                    />
                 </div>
             </div>
         </div>
