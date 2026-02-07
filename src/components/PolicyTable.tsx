@@ -6,6 +6,8 @@ import PolicyImportModal from './PolicyImportModal';
 import { useDebounce } from '../hooks/useDebounce';
 import * as XLSX from 'xlsx';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { format } from 'date-fns';
+import toast from 'react-hot-toast';
 
 interface Policy {
   id: number;
@@ -46,6 +48,7 @@ export default function PolicyTable() {
   const [totalCount, setTotalCount] = useState(0);
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1);
+  const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [showCancelled, setShowCancelled] = useState(true);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   
@@ -72,7 +75,7 @@ export default function PolicyTable() {
     try {
         const d = new Date(dateStr);
         if (isNaN(d.getTime())) return String(dateStr);
-        return d.toLocaleDateString('tr-TR');
+        return format(d, 'dd.MM.yyyy');
     } catch {
         return String(dateStr);
     }
@@ -85,7 +88,7 @@ export default function PolicyTable() {
         let query = supabase.from('policeler').select('*');
 
         if (selectedMonth !== 0) {
-            const year = new Date().getFullYear();
+            const year = selectedYear;
             const startStr = `${year}-${String(selectedMonth).padStart(2, '0')}-01`;
             let endYear = year;
             let endMonth = selectedMonth + 1;
@@ -159,13 +162,12 @@ export default function PolicyTable() {
 
       // Employee Filter: Only show own policies
       if (user?.role === 'employee' || user?.role === 'sub_agent') {
-          // Use kesen (not kesen_id) as per error logs confirming the column name
-          query = query.eq('kesen', user.id); 
+          query = query.eq('employee_id', user.id); 
       }
 
       // Month Filter (Full Month Coverage Fix - Timezone Safe)
       if (selectedMonth !== 0) {
-            const year = new Date().getFullYear();
+            const year = selectedYear;
             const startStr = `${year}-${String(selectedMonth).padStart(2, '0')}-01`;
             let endYear = year;
             let endMonth = selectedMonth + 1;
@@ -218,7 +220,7 @@ export default function PolicyTable() {
 
   useEffect(() => {
     fetchPolicies(sort, debouncedSearch);
-  }, [sort, selectedMonth, debouncedSearch, showCancelled]);
+  }, [sort, selectedMonth, selectedYear, debouncedSearch, showCancelled]);
 
   const handleSort = (columnId: string) => {
       if (sort?.id === columnId) {
@@ -246,26 +248,68 @@ export default function PolicyTable() {
     { id: "police_no", header: "POLİÇE NO", minWidth: 160, sortable: true },
     { id: "acente", header: "ACENTE", minWidth: 160, sortable: true },
     { id: "kart", header: "KART", minWidth: 160, sortable: true },
-    { id: "ek_bilgiler_iletisim", header: "EK BİLGİLER", minWidth: 250, sortable: true },
+    { id: "ek_bilgiler_iletisim", header: "EK BİLGİLER / İLETİŞİM", minWidth: 250, sortable: true },
     { id: "net_prim", header: "NET PRİM", minWidth: 140, sortable: true },
     { id: "komisyon", header: "KOMİSYON", minWidth: 140, sortable: true },
     { id: "durum", header: "DURUM", minWidth: 120, sortable: true },
   ];
 
+  // Context Menu Copy
+  const handleCellContextMenu = (e: React.MouseEvent, text: any) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!text) return;
+      
+      const textToCopy = String(text);
+      
+      const copyToClipboard = async () => {
+        try {
+            if (navigator.clipboard && window.isSecureContext) {
+                await navigator.clipboard.writeText(textToCopy);
+                toast.success(`Kopyalandı: ${textToCopy}`, { id: 'copy', duration: 1000, icon: '📋' });
+            } else {
+                const textArea = document.createElement("textarea");
+                textArea.value = textToCopy;
+                textArea.style.position = "fixed";
+                textArea.style.left = "-9999px";
+                document.body.appendChild(textArea);
+                textArea.focus();
+                textArea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textArea);
+                toast.success(`Kopyalandı: ${textToCopy}`, { id: 'copy', duration: 1000, icon: '📋' });
+            }
+        } catch (err) {
+            console.error('Copy failed', err);
+            toast.error('Kopyalama başarısız');
+        }
+      };
+
+      copyToClipboard();
+  };
+
   const renderCell = (policy: Policy, colId: string) => {
-      switch(colId) {
-          case 'brut_prim':
-          case 'net_prim':
-          case 'komisyon':
-              return formatCurrency((policy as any)[colId]);
-          case 'tarih':
-          case 'dogum_tarihi':
-              return formatDate((policy as any)[colId]);
-          case 'durum':
-              return (policy as any)[colId] || 'POLİÇE';
-          default:
-              return (policy as any)[colId] || '-';
-      }
+      const content = (() => {
+        switch(colId) {
+            case 'brut_prim':
+            case 'net_prim':
+            case 'komisyon':
+                return formatCurrency((policy as any)[colId]);
+            case 'tarih':
+            case 'dogum_tarihi':
+                return formatDate((policy as any)[colId]);
+            case 'durum':
+                return (policy as any)[colId] || 'POLİÇE';
+            default:
+                return (policy as any)[colId] || '-';
+        }
+      })();
+
+      return (
+          <div onContextMenu={(e) => handleCellContextMenu(e, (policy as any)[colId])} className="w-full h-full flex items-center">
+              {content}
+          </div>
+      );
   };
 
   // Virtualizer
@@ -312,6 +356,16 @@ export default function PolicyTable() {
                     <option value={10}>Ekim</option>
                     <option value={11}>Kasım</option>
                     <option value={12}>Aralık</option>
+                </select>
+                <div className="w-px h-6 bg-gray-300 mx-1"></div>
+                <select 
+                    className="bg-transparent border-none text-sm font-medium text-gray-700 focus:ring-0 cursor-pointer py-1.5"
+                    value={selectedYear}
+                    onChange={(e) => setSelectedYear(Number(e.target.value))}
+                >
+                    {Array.from({ length: 6 }, (_, i) => new Date().getFullYear() - 2 + i).map(year => (
+                        <option key={year} value={year}>{year}</option>
+                    ))}
                 </select>
             </div>
 

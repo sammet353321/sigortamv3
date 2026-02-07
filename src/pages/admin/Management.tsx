@@ -45,12 +45,12 @@ export default function ManagementPage() {
                     Sohbet Grupları
                 </button>
                 <button
-                    onClick={() => setActiveTab('settings')}
+                    onClick={() => setActiveTab('companies')}
                     className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                        activeTab === 'settings' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+                        activeTab === 'companies' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'
                     }`}
                 >
-                    Genel Ayarlar
+                    Sigorta Şirketleri
                 </button>
             </div>
 
@@ -59,7 +59,6 @@ export default function ManagementPage() {
                 {activeTab === 'users' && <UsersPage />}
                 {activeTab === 'employee-groups' && <EmployeeGroupsManagement />}
                 {activeTab === 'chat-groups' && <ChatGroupsManagement />}
-                {activeTab === 'settings' && <GeneralSettings />}
             </div>
         </div>
     );

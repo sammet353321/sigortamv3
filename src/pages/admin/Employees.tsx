@@ -1,16 +1,17 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useMemo } from 'react';
 import { supabase } from '@/lib/supabase';
 import { 
   User, Search, Phone, Mail, Calendar, 
   TrendingUp, DollarSign, FileText, PieChart as PieChartIcon,
-  ChevronRight, Loader2
+  ChevronRight, Loader2, ArrowUpRight, Users, Briefcase
 } from 'lucide-react';
-import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay } from 'date-fns';
+import { format, eachDayOfInterval } from 'date-fns';
 import { tr } from 'date-fns/locale';
 import { 
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
-  PieChart, Pie, Cell, Legend
+  PieChart, Pie, Cell, Legend, BarChart, Bar
 } from 'recharts';
+import { useQuery } from '@tanstack/react-query';
 
 // --- Types ---
 interface Employee {
@@ -21,22 +22,14 @@ interface Employee {
   role: string;
 }
 
-interface Stats {
-  totalPolicies: number;
-  totalQuotes: number;
-  totalPremium: number;
-  totalCommission: number;
-  avgPremium: number;
-  conversionRate: number;
-  dailyTrend: any[];
-  companyDist: any[];
-  productDist: any[];
+interface EmployeeGroup {
+  id: string;
+  name: string;
 }
 
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#6366f1', '#14b8a6'];
 
 // --- Helper Components ---
-
 const StatCard = ({ title, value, subValue, icon: Icon, colorClass, bgClass }: any) => (
   <div className="bg-white p-5 rounded-xl border border-gray-100 shadow-sm flex items-start justify-between hover:shadow-md transition-shadow">
     <div>
@@ -51,175 +44,185 @@ const StatCard = ({ title, value, subValue, icon: Icon, colorClass, bgClass }: a
 );
 
 export default function EmployeesPage() {
-  const [employees, setEmployees] = useState<Employee[]>([]);
-  const [selectedEmp, setSelectedEmp] = useState<Employee | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [statsLoading, setStatsLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState<'employees' | 'groups'>('employees');
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   
   // Date Filter
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth());
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
+  const [selectedWeek, setSelectedWeek] = useState<number | 'all'>('all');
 
-  const [stats, setStats] = useState<Stats>({
-    totalPolicies: 0,
-    totalQuotes: 0,
-    totalPremium: 0,
-    totalCommission: 0,
-    avgPremium: 0,
-    conversionRate: 0,
-    dailyTrend: [],
-    companyDist: [],
-    productDist: []
+  // 1. Fetch Employees
+  const { data: employees = [], isLoading: loadingEmployees } = useQuery({
+    queryKey: ['employees'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('users')
+        .select('*')
+        .in('role', ['employee', 'sub_agent'])
+        .order('name');
+      if (error) throw error;
+      return data as Employee[];
+    }
   });
 
-  // Fetch Employees List
-  useEffect(() => {
-    async function fetchEmployees() {
-      try {
-        const { data, error } = await supabase
-          .from('users')
-          .select('*')
-          .in('role', ['employee', 'sub_agent']) // Removed 'admin'
-          .order('name');
-        
-        if (error) throw error;
-        setEmployees(data || []);
-        if (data && data.length > 0 && !selectedEmp) {
-          setSelectedEmp(data[0]);
-        }
-      } catch (error) {
-        console.error('Error fetching employees:', error);
-      } finally {
-        setLoading(false);
-      }
+  // 2. Fetch Employee Groups
+  const { data: groups = [], isLoading: loadingGroups } = useQuery({
+    queryKey: ['employee_groups'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('employee_groups')
+        .select('id, name')
+        .order('name');
+      if (error) throw error;
+      return data as EmployeeGroup[];
     }
-    fetchEmployees();
-  }, []);
+  });
 
-  // Fetch Stats when Employee or Date changes
-  useEffect(() => {
-    if (!selectedEmp) return;
-    
-    async function fetchStats() {
-      setStatsLoading(true);
-      try {
-        const startDate = new Date(selectedYear, selectedMonth, 1);
-        const endDate = new Date(selectedYear, selectedMonth + 1, 0); // Last day of month
+  // Default Selection Logic
+  if (!selectedId) {
+      if (activeTab === 'employees' && employees.length > 0) setSelectedId(employees[0].id);
+      else if (activeTab === 'groups' && groups.length > 0) setSelectedId(groups[0].id);
+  }
+
+  const selectedItem = activeTab === 'employees' 
+    ? employees.find(e => e.id === selectedId)
+    : groups.find(g => g.id === selectedId);
+
+  // 3. Fetch Stats Data (Unified for both Employee and Group)
+  const { data: statsData, isLoading: statsLoading } = useQuery({
+    queryKey: ['unifiedStats', activeTab, selectedId, selectedMonth, selectedYear, selectedWeek],
+    enabled: !!selectedId,
+    queryFn: async () => {
+        // Calculate Date Range
+        let startDate = new Date(selectedYear, selectedMonth, 1);
+        let endDate = new Date(selectedYear, selectedMonth + 1, 0);
+
+        if (selectedWeek !== 'all') {
+             const startDay = (selectedWeek - 1) * 7 + 1;
+             const endDay = Math.min(startDay + 6, endDate.getDate());
+             startDate = new Date(selectedYear, selectedMonth, startDay);
+             endDate = new Date(selectedYear, selectedMonth, endDay);
+        }
+
         const startStr = format(startDate, 'yyyy-MM-dd');
         const endStr = format(endDate, 'yyyy-MM-dd');
 
-        // Fetch Policies
-        const { data: policies, error } = await supabase
-          .from('policeler')
-          .select('id, net_prim, komisyon, sirket, tur, tarih')
-          .eq('employee_id', selectedEmp.id)
-          .gte('tarih', startStr)
-          .lte('tarih', endStr);
+        let policiesQuery = supabase.from('policeler').select('id, net_prim, komisyon, sirket, tur, tarih');
+        let quotesQuery = supabase.from('teklifler').select('id, sirket, tur, tarih, durum');
 
-        if (error) throw error;
+        if (activeTab === 'employees') {
+            policiesQuery = policiesQuery.eq('employee_id', selectedId);
+            quotesQuery = quotesQuery.eq('employee_id', selectedId);
+        } else {
+            // Group Logic: First get all members of the group
+            const { data: members } = await supabase
+                .from('employee_group_members')
+                .select('user_id')
+                .eq('group_id', selectedId);
+            
+            const memberIds = members?.map(m => m.user_id) || [];
+            
+            if (memberIds.length === 0) {
+                // Return empty if no members
+                 return { policies: [], quotes: [], startDate, endDate };
+            }
 
-        // Fetch Quotes (Teklifler)
-        const { data: quotes, error: quotesError } = await supabase
-          .from('teklifler')
-          .select('id, sirket, tur, tarih')
-          .eq('employee_id', selectedEmp.id)
-          .gte('tarih', startStr)
-          .lte('tarih', endStr);
+            policiesQuery = policiesQuery.in('employee_id', memberIds);
+            quotesQuery = quotesQuery.in('employee_id', memberIds);
+        }
 
-        if (quotesError) throw quotesError;
+        // Apply Date Filters
+        policiesQuery = policiesQuery.gte('tarih', startStr).lte('tarih', endStr);
+        quotesQuery = quotesQuery.gte('tarih', startStr).lte('tarih', endStr);
 
-        // Process Stats
-        const totalPolicies = policies?.length || 0;
-        const totalQuotes = quotes?.length || 0;
-        const totalPremium = policies?.reduce((sum, p) => sum + (Number(p.net_prim) || 0), 0) || 0;
-        const totalCommission = policies?.reduce((sum, p) => sum + (Number(p.komisyon) || 0), 0) || 0;
-        const avgPremium = totalPolicies > 0 ? totalPremium / totalPolicies : 0;
-        const conversionRate = totalQuotes > 0 ? (totalPolicies / totalQuotes) * 100 : 0;
+        const [policiesRes, quotesRes] = await Promise.all([policiesQuery, quotesQuery]);
 
-        // Daily Trend
-        const days = eachDayOfInterval({ start: startDate, end: endDate });
-        const dailyTrend = days.map(day => {
-          const dayStr = format(day, 'yyyy-MM-dd');
-          const dayPolicies = policies?.filter(p => p.tarih === dayStr) || [];
-          const dayQuotes = quotes?.filter(q => q.tarih === dayStr) || [];
-          return {
-            date: format(day, 'd MMM', { locale: tr }),
-            amount: dayPolicies.reduce((sum, p) => sum + (Number(p.net_prim) || 0), 0),
-            policyCount: dayPolicies.length,
-            quoteCount: dayQuotes.length
-          };
-        });
+        if (policiesRes.error) throw policiesRes.error;
+        if (quotesRes.error) throw quotesRes.error;
 
-        // Company Distribution
-        const companyMap = new Map();
-        policies?.forEach(p => {
-          const name = p.sirket || 'Diğer';
-          companyMap.set(name, (companyMap.get(name) || 0) + 1);
-        });
-        const companyDist = Array.from(companyMap.entries())
+        return { policies: policiesRes.data, quotes: quotesRes.data, startDate, endDate };
+    }
+  });
+
+  // 4. Process Data (Memoized)
+  const stats = useMemo(() => {
+      if (!statsData) return null;
+      const { policies, quotes, startDate, endDate } = statsData;
+
+      const totalPolicies = policies?.length || 0;
+      const totalQuotes = quotes?.length || 0;
+      const totalPremium = policies?.reduce((sum, p) => sum + (Number(p.net_prim) || 0), 0) || 0;
+      const totalCommission = policies?.reduce((sum, p) => sum + (Number(p.komisyon) || 0), 0) || 0;
+      const conversionRate = totalQuotes > 0 ? (totalPolicies / totalQuotes) * 100 : 0;
+
+      // Daily Trend
+      const days = eachDayOfInterval({ start: startDate, end: endDate });
+      const dailyTrend = days.map(day => {
+        const dayStr = format(day, 'yyyy-MM-dd');
+        const dayPolicies = policies?.filter(p => p.tarih === dayStr) || [];
+        const dayQuotes = quotes?.filter(q => q.tarih === dayStr) || [];
+        return {
+          date: format(day, 'd MMM', { locale: tr }),
+          amount: dayPolicies.reduce((sum, p) => sum + (Number(p.net_prim) || 0), 0),
+          policyCount: dayPolicies.length,
+          quoteCount: dayQuotes.length
+        };
+      });
+
+      // Company Distribution
+      const companyMap = new Map();
+      policies?.forEach(p => {
+        const name = p.sirket || 'Diğer';
+        companyMap.set(name, (companyMap.get(name) || 0) + 1);
+      });
+      const companyDist = Array.from(companyMap.entries())
+        .map(([name, value]) => ({ name, value }))
+        .sort((a, b) => b.value - a.value)
+        .slice(0, 5);
+
+      // Product Distribution (Policies)
+      const productPolicyMap = new Map();
+      policies?.forEach(p => {
+          const name = p.tur || 'Diğer';
+          productPolicyMap.set(name, (productPolicyMap.get(name) || 0) + 1);
+      });
+      const productPolicyDist = Array.from(productPolicyMap.entries())
+        .map(([name, value]) => ({ name, value }))
+        .sort((a, b) => b.value - a.value);
+
+      // Product Distribution (Quotes)
+      const productQuoteMap = new Map();
+      quotes?.forEach(q => {
+          const name = q.tur || 'Diğer';
+          productQuoteMap.set(name, (productQuoteMap.get(name) || 0) + 1);
+      });
+      const productQuoteDist = Array.from(productQuoteMap.entries())
           .map(([name, value]) => ({ name, value }))
-          .sort((a, b) => b.value - a.value)
-          .slice(0, 5); // Top 5
+          .sort((a, b) => b.value - a.value);
 
-        // Product Distribution with Conversion Rates
-        const productStats = new Map();
-        
-        // Count Quotes per Product
-        quotes?.forEach(q => {
-            const name = q.tur || 'Diğer';
-            if (!productStats.has(name)) productStats.set(name, { quotes: 0, policies: 0 });
-            productStats.get(name).quotes++;
-        });
-
-        // Count Policies per Product
-        policies?.forEach(p => {
-            const name = p.tur || 'Diğer';
-            if (!productStats.has(name)) productStats.set(name, { quotes: 0, policies: 0 });
-            productStats.get(name).policies++;
-        });
-
-        const productDist = Array.from(productStats.entries())
-          .map(([name, stats]) => ({
-              name,
-              value: stats.policies, // For Pie Chart
-              quotes: stats.quotes,
-              policies: stats.policies,
-              conversion: stats.quotes > 0 ? (stats.policies / stats.quotes) * 100 : 0
-          }))
-          .sort((a, b) => b.policies - a.policies);
-
-        setStats({
+      return {
           totalPolicies,
           totalQuotes,
           totalPremium,
           totalCommission,
-          avgPremium,
           conversionRate,
           dailyTrend,
           companyDist,
-          productDist
-        });
+          productPolicyDist,
+          productQuoteDist
+      };
+  }, [statsData]);
 
-      } catch (error) {
-        console.error('Error fetching stats:', error);
-      } finally {
-        setStatsLoading(false);
-      }
-    }
-
-    fetchStats();
-  }, [selectedEmp, selectedMonth, selectedYear]);
-
-  const filteredEmployees = employees.filter(emp => 
-    emp.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    emp.email?.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredList = activeTab === 'employees'
+    ? employees.filter(e => e.name.toLowerCase().includes(searchTerm.toLowerCase()))
+    : groups.filter(g => g.name.toLowerCase().includes(searchTerm.toLowerCase()));
 
   const formatCurrency = (val: number) => 
     new Intl.NumberFormat('tr-TR', { style: 'currency', currency: 'TRY', maximumFractionDigits: 0 }).format(val);
 
-  if (loading) return (
+  if (loadingEmployees || loadingGroups) return (
     <div className="flex items-center justify-center h-full">
       <Loader2 className="animate-spin text-blue-600" size={32} />
     </div>
@@ -231,12 +234,28 @@ export default function EmployeesPage() {
       {/* Sidebar List */}
       <div className="w-80 flex-shrink-0 bg-white rounded-xl shadow-sm border border-gray-200 flex flex-col overflow-hidden">
         <div className="p-4 border-b border-gray-100">
-          <h2 className="font-bold text-gray-800 mb-4">Çalışan Listesi</h2>
+          <div className="flex bg-gray-100 p-1 rounded-lg mb-4">
+              <button 
+                onClick={() => { setActiveTab('employees'); setSelectedId(null); }}
+                className={`flex-1 flex items-center justify-center gap-2 py-2 text-sm font-medium rounded-md transition-all ${activeTab === 'employees' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+              >
+                  <User size={16} />
+                  Çalışanlar
+              </button>
+              <button 
+                onClick={() => { setActiveTab('groups'); setSelectedId(null); }}
+                className={`flex-1 flex items-center justify-center gap-2 py-2 text-sm font-medium rounded-md transition-all ${activeTab === 'groups' ? 'bg-white text-purple-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+              >
+                  <Briefcase size={16} />
+                  Gruplar
+              </button>
+          </div>
+
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
             <input 
               type="text" 
-              placeholder="Personel ara..." 
+              placeholder={activeTab === 'employees' ? "Personel ara..." : "Grup ara..."}
               className="w-full pl-9 pr-4 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
@@ -245,52 +264,62 @@ export default function EmployeesPage() {
         </div>
         
         <div className="flex-1 overflow-y-auto p-2 space-y-1">
-          {filteredEmployees.map(emp => (
+          {filteredList.map((item: any) => (
             <button
-              key={emp.id}
-              onClick={() => setSelectedEmp(emp)}
+              key={item.id}
+              onClick={() => setSelectedId(item.id)}
               className={`w-full flex items-center gap-3 p-3 rounded-lg transition-all text-left group
-                ${selectedEmp?.id === emp.id ? 'bg-blue-50 border-blue-200 shadow-sm' : 'hover:bg-gray-50 border-transparent'}
+                ${selectedId === item.id 
+                    ? (activeTab === 'employees' ? 'bg-blue-50 border-blue-200 shadow-sm' : 'bg-purple-50 border-purple-200 shadow-sm') 
+                    : 'hover:bg-gray-50 border-transparent'}
                 border
               `}
             >
               <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm shadow-sm
-                ${selectedEmp?.id === emp.id ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 group-hover:bg-gray-200'}
+                ${selectedId === item.id 
+                    ? (activeTab === 'employees' ? 'bg-blue-600 text-white' : 'bg-purple-600 text-white') 
+                    : 'bg-gray-100 text-gray-500 group-hover:bg-gray-200'}
               `}>
-                {emp.name?.substring(0, 2).toUpperCase() || '??'}
+                {activeTab === 'employees' ? (item.name?.substring(0, 2).toUpperCase() || '??') : <Briefcase size={18} />}
               </div>
               <div className="flex-1 min-w-0">
-                <p className={`font-medium truncate ${selectedEmp?.id === emp.id ? 'text-blue-900' : 'text-gray-800'}`}>
-                  {emp.name || 'İsimsiz'}
+                <p className={`font-medium truncate ${selectedId === item.id ? (activeTab === 'employees' ? 'text-blue-900' : 'text-purple-900') : 'text-gray-800'}`}>
+                  {item.name || 'İsimsiz'}
                 </p>
                 <p className="text-xs text-gray-500 truncate capitalize">
-                  {emp.role === 'employee' ? 'Çalışan' : emp.role?.replace('_', ' ')}
+                  {activeTab === 'employees' ? (item.role === 'employee' ? 'Çalışan' : item.role?.replace('_', ' ')) : 'Çalışan Grubu'}
                 </p>
               </div>
-              {selectedEmp?.id === emp.id && <ChevronRight size={16} className="text-blue-600" />}
+              {selectedId === item.id && <ChevronRight size={16} className={activeTab === 'employees' ? 'text-blue-600' : 'text-purple-600'} />}
             </button>
           ))}
+          {filteredList.length === 0 && (
+              <p className="text-center text-gray-400 py-8 text-sm">Kayıt bulunamadı.</p>
+          )}
         </div>
       </div>
 
       {/* Main Content */}
       <div className="flex-1 flex flex-col min-w-0 bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-        {selectedEmp ? (
+        {selectedItem ? (
           <div className="flex flex-col h-full">
             {/* Header */}
             <div className="p-6 border-b border-gray-100 flex justify-between items-start bg-gray-50/50">
               <div className="flex items-center gap-4">
-                <div className="w-16 h-16 rounded-full bg-blue-600 text-white flex items-center justify-center text-2xl font-bold shadow-md">
-                  {selectedEmp.name?.substring(0, 2).toUpperCase()}
+                <div className={`w-16 h-16 rounded-full text-white flex items-center justify-center text-2xl font-bold shadow-md ${activeTab === 'employees' ? 'bg-blue-600' : 'bg-purple-600'}`}>
+                   {activeTab === 'employees' ? selectedItem.name?.substring(0, 2).toUpperCase() : <Briefcase size={32} />}
                 </div>
                 <div>
-                  <h1 className="text-2xl font-bold text-gray-900">{selectedEmp.name}</h1>
+                  <h1 className="text-2xl font-bold text-gray-900">{selectedItem.name}</h1>
                   <div className="flex items-center gap-4 mt-1 text-sm text-gray-500">
-                    <span className="flex items-center gap-1"><Mail size={14} /> {selectedEmp.email}</span>
-                    {selectedEmp.phone && <span className="flex items-center gap-1"><Phone size={14} /> {selectedEmp.phone}</span>}
-                    <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded text-xs font-bold uppercase">
-                      {selectedEmp.role === 'employee' ? 'Çalışan' : selectedEmp.role}
-                    </span>
+                    {activeTab === 'employees' ? (
+                        <>
+                            <span className="flex items-center gap-1"><Mail size={14} /> {selectedItem.email}</span>
+                            {selectedItem.phone && <span className="flex items-center gap-1"><Phone size={14} /> {selectedItem.phone}</span>}
+                        </>
+                    ) : (
+                        <span className="flex items-center gap-1"><Users size={14} /> Grup Performans Analizi</span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -298,6 +327,21 @@ export default function EmployeesPage() {
               {/* Date Filter */}
               <div className="flex items-center gap-2 bg-white p-1 rounded-lg border border-gray-200 shadow-sm">
                 <Calendar size={16} className="text-gray-500 ml-2" />
+                
+                {/* Week Selector */}
+                <select 
+                  className="bg-transparent text-sm font-medium text-gray-700 p-2 outline-none cursor-pointer border-r"
+                  value={selectedWeek}
+                  onChange={(e) => setSelectedWeek(e.target.value === 'all' ? 'all' : Number(e.target.value))}
+                >
+                  <option value="all">Tüm Ay</option>
+                  <option value={1}>1. Hafta</option>
+                  <option value={2}>2. Hafta</option>
+                  <option value={3}>3. Hafta</option>
+                  <option value={4}>4. Hafta</option>
+                  <option value={5}>5. Hafta</option>
+                </select>
+
                 <select 
                   className="bg-transparent text-sm font-medium text-gray-700 p-2 outline-none cursor-pointer"
                   value={selectedMonth}
@@ -319,14 +363,14 @@ export default function EmployeesPage() {
 
             {/* Scrollable Stats Area */}
             <div className="flex-1 overflow-y-auto p-6">
-              {statsLoading ? (
+              {statsLoading || !stats ? (
                 <div className="h-full flex items-center justify-center">
                   <Loader2 className="animate-spin text-gray-300" size={48} />
                 </div>
               ) : (
                 <div className="space-y-6">
                   {/* KPI Cards */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                     <StatCard 
                       title="Net Üretim" 
                       value={formatCurrency(stats.totalPremium)} 
@@ -348,13 +392,6 @@ export default function EmployeesPage() {
                       icon={FileText} 
                       colorClass="text-purple-600" 
                       bgClass="bg-purple-50" 
-                    />
-                    <StatCard 
-                      title="Ort. Poliçe Primi" 
-                      value={formatCurrency(stats.avgPremium)} 
-                      icon={PieChartIcon} 
-                      colorClass="text-orange-600" 
-                      bgClass="bg-orange-50" 
                     />
                   </div>
 
@@ -388,14 +425,14 @@ export default function EmployeesPage() {
                       </div>
                     </div>
 
-                    {/* Product Distribution */}
+                    {/* Product Policy Distribution */}
                     <div className="bg-white p-6 rounded-xl border border-gray-100 shadow-sm h-[350px] flex flex-col">
-                      <h3 className="font-bold text-gray-800 mb-4">Ürün Dağılımı</h3>
+                      <h3 className="font-bold text-gray-800 mb-4">Ürün Dağılımı (Poliçe)</h3>
                       <div className="flex-1 min-h-0 relative">
                         <ResponsiveContainer width="100%" height="100%">
                           <PieChart>
                             <Pie
-                              data={stats.productDist}
+                              data={stats.productPolicyDist}
                               cx="50%"
                               cy="50%"
                               innerRadius={60}
@@ -403,7 +440,7 @@ export default function EmployeesPage() {
                               paddingAngle={2}
                               dataKey="value"
                             >
-                              {stats.productDist.map((_, index) => (
+                              {stats.productPolicyDist.map((_, index) => (
                                 <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                               ))}
                             </Pie>
@@ -413,47 +450,58 @@ export default function EmployeesPage() {
                         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                           <div className="text-center">
                             <span className="text-2xl font-bold text-gray-800">{stats.totalPolicies}</span>
-                            <p className="text-xs text-gray-500">Toplam</p>
+                            <p className="text-xs text-gray-500">Poliçe</p>
                           </div>
                         </div>
                       </div>
-                      <div className="mt-4 space-y-2 overflow-y-auto max-h-[150px] pr-2 custom-scrollbar">
-                        {stats.productDist.map((entry, index) => (
-                          <div key={index} className="flex justify-between items-center text-xs p-2 hover:bg-gray-50 rounded">
-                            <div className="flex items-center gap-2">
-                                <div className="w-2 h-2 rounded-full flex-shrink-0" style={{backgroundColor: COLORS[index % COLORS.length]}}></div>
-                                <span className="font-medium text-gray-700">{entry.name}</span>
-                            </div>
-                            <div className="text-right">
-                                <div className="font-bold text-gray-900">{entry.policies} Poliçe</div>
-                                <div className="text-gray-500 text-[10px]">{entry.quotes} Teklif (%{entry.conversion.toFixed(0)})</div>
-                            </div>
-                          </div>
+                      <div className="mt-4 flex flex-wrap gap-2 text-xs text-gray-500 justify-center">
+                        {stats.productPolicyDist.slice(0, 3).map((e, i) => (
+                            <span key={i} className="flex items-center gap-1">
+                                <span className="w-2 h-2 rounded-full" style={{background: COLORS[i]}}></span>
+                                {e.name}
+                            </span>
                         ))}
                       </div>
                     </div>
                   </div>
 
-                  {/* Company Stats Table */}
-                  <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-                    <div className="p-4 border-b border-gray-50">
-                      <h3 className="font-bold text-gray-800">Şirket Bazlı Dağılım</h3>
-                    </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 p-4">
-                       {stats.companyDist.map((item, idx) => (
-                         <div key={idx} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                           <div className="flex items-center gap-3">
-                             <div className="w-8 h-8 rounded-lg bg-white flex items-center justify-center font-bold text-gray-700 shadow-sm border border-gray-100">
-                               {idx + 1}
-                             </div>
-                             <span className="font-medium text-gray-700">{item.name}</span>
-                           </div>
-                           <span className="font-bold text-gray-900">{item.value} Adet</span>
-                         </div>
-                       ))}
-                       {stats.companyDist.length === 0 && <p className="text-gray-500 text-sm p-2">Veri bulunamadı.</p>}
-                    </div>
-                  </div>
+                  {/* Charts Row 2 - More Charts */}
+                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                       {/* Product Quote Distribution */}
+                       <div className="bg-white p-6 rounded-xl border border-gray-100 shadow-sm h-[350px] flex flex-col">
+                          <h3 className="font-bold text-gray-800 mb-4">Teklif Dağılımı (Ürün Bazlı)</h3>
+                          <ResponsiveContainer width="100%" height="100%">
+                              <BarChart data={stats.productQuoteDist.slice(0, 7)} layout="vertical">
+                                  <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} />
+                                  <XAxis type="number" hide />
+                                  <YAxis dataKey="name" type="category" width={100} tick={{fontSize: 12}} />
+                                  <Tooltip />
+                                  <Bar dataKey="value" fill="#8b5cf6" radius={[0, 4, 4, 0]} name="Teklif Sayısı" />
+                              </BarChart>
+                          </ResponsiveContainer>
+                       </div>
+
+                       {/* Company Stats Table */}
+                       <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden h-[350px] flex flex-col">
+                            <div className="p-4 border-b border-gray-50">
+                            <h3 className="font-bold text-gray-800">Şirket Bazlı Dağılım</h3>
+                            </div>
+                            <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                            {stats.companyDist.map((item, idx) => (
+                                <div key={idx} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                                <div className="flex items-center gap-3">
+                                    <div className="w-8 h-8 rounded-lg bg-white flex items-center justify-center font-bold text-gray-700 shadow-sm border border-gray-100">
+                                    {idx + 1}
+                                    </div>
+                                    <span className="font-medium text-gray-700">{item.name}</span>
+                                </div>
+                                <span className="font-bold text-gray-900">{item.value} Adet</span>
+                                </div>
+                            ))}
+                            {stats.companyDist.length === 0 && <p className="text-gray-500 text-sm p-2">Veri bulunamadı.</p>}
+                            </div>
+                       </div>
+                   </div>
 
                 </div>
               )}
@@ -462,7 +510,7 @@ export default function EmployeesPage() {
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center text-gray-400">
             <User size={64} className="mb-4 opacity-20" />
-            <p className="text-lg font-medium">Lütfen listeden bir çalışan seçin</p>
+            <p className="text-lg font-medium">Lütfen soldan seçim yapın</p>
           </div>
         )}
       </div>

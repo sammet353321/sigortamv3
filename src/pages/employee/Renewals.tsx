@@ -30,7 +30,7 @@ interface Policy {
   ilgili_kisi: string;
   acente: string;
   kart: string;
-  ek_bilgiler: string;
+  ek_bilgiler_iletisim: string;
   urun: string;
 }
 
@@ -159,7 +159,7 @@ export default function RenewalsPage() {
 
   const downloadExcel = () => {
     if (!sortedPolicies.length) return;
-    const headers = ['AD SOYAD', 'DOĞUM TARİHİ', 'ŞİRKET', 'BİTİŞ TARİHİ', 'ŞASİ', 'PLAKA', 'TC/VKN', 'BELGE NO', 'ARAÇ CİNSİ', 'BRÜT PRİM', 'TÜR', 'KESEN', 'İLGİLİ KİŞİ', 'POLİÇE NO', 'ACENTE', 'KART', 'EK BİLGİLER', 'NET PRİM', 'KOMİSYON', 'KALAN GÜN'];
+    const headers = ['AD SOYAD', 'DOĞUM TARİHİ', 'ŞİRKET', 'BİTİŞ TARİHİ', 'ŞASİ', 'PLAKA', 'TC/VKN', 'BELGE NO', 'ARAÇ CİNSİ', 'BRÜT PRİM', 'TÜR', 'KESEN', 'İLGİLİ KİŞİ', 'POLİÇE NO', 'ACENTE', 'KART', 'EK BİLGİLER / İLETİŞİM', 'NET PRİM', 'KOMİSYON', 'KALAN GÜN'];
     
     const csvContent = [
       headers.join(';'),
@@ -172,7 +172,7 @@ export default function RenewalsPage() {
           `"${p.ad_soyad || ''}"`, `"${date}"`, `"${p.sirket || ''}"`, `"${endDate}"`, `"${p.sasi || ''}"`,
           `"${p.plaka || ''}"`, `"${p.tc_vkn || ''}"`, `"${p.belge_no || ''}"`, `"${p.arac_cinsi || ''}"`,
           `"${p.brut_prim || ''}"`, `"${p.tur || ''}"`, `"${(p as any).kesen || ''}"`, `"${(p as any).ilgili_kisi || ''}"`, `"${p.police_no || ''}"`,
-          `"${p.acente || ''}"`, `"${p.kart || ''}"`, `"${(p.ek_bilgiler || '').replace(/"/g, '""')}"`,
+          `"${p.acente || ''}"`, `"${p.kart || ''}"`, `"${(p.ek_bilgiler_iletisim || '').replace(/"/g, '""')}"`,
           `"${p.net_prim || ''}"`, `"${p.komisyon || ''}"`, `"${daysLeft}"`
         ].join(';');
       })
@@ -189,11 +189,10 @@ export default function RenewalsPage() {
   };
 
   const columns: Column[] = [
-    { id: "tarih", header: "BİTİŞ TARİHİ", minWidth: "120px", sortable: true },
-    { id: "days_left", header: "KALAN GÜN", minWidth: "100px", sortable: false },
-    { id: "ad_soyad", header: "AD SOYAD", minWidth: "150px", sortable: true }, // Reduced from 200px
+    { id: "ad_soyad", header: "AD SOYAD", minWidth: "150px", sortable: true },
     { id: "dogum_tarihi", header: "DOĞUM TARİHİ", minWidth: "120px", sortable: true },
     { id: "sirket", header: "ŞİRKET", minWidth: "150px", sortable: true },
+    { id: "tarih", header: "TARİH", minWidth: "120px", sortable: true },
     { id: "sasi", header: "ŞASİ", minWidth: "180px", sortable: true },
     { id: "plaka", header: "PLAKA", minWidth: "120px", sortable: true },
     { id: "tc_vkn", header: "TC/VKN", minWidth: "140px", sortable: true },
@@ -206,9 +205,10 @@ export default function RenewalsPage() {
     { id: "police_no", header: "POLİÇE NO", minWidth: "160px", sortable: true },
     { id: "acente", header: "ACENTE", minWidth: "160px", sortable: true },
     { id: "kart", header: "KART", minWidth: "160px", sortable: true },
-    { id: "ek_bilgiler", header: "EK BİLGİLER", minWidth: "250px", sortable: true },
+    { id: "ek_bilgiler_iletisim", header: "EK BİLGİLER / İLETİŞİM", minWidth: "250px", sortable: true },
     { id: "net_prim", header: "NET PRİM", minWidth: "140px", sortable: true },
     { id: "komisyon", header: "KOMİSYON", minWidth: "140px", sortable: true },
+    { id: "days_left", header: "KALAN GÜN", minWidth: "100px", sortable: false },
   ];
 
   const renderCell = (policy: Policy, colId: string) => {

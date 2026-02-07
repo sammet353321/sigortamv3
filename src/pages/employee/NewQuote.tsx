@@ -12,7 +12,7 @@ interface EmployeeNewQuoteProps {
     initialState?: any;
     onClose?: () => void;
     initialGroupName?: string;
-    onSendMessage?: (messages: string[], files: File[]) => Promise<void>;
+    onSendMessage?: (items: { type: 'text' | 'file', content: string | File }[]) => Promise<void>;
 }
 
 export default function EmployeeNewQuote({ embedded, initialState, onClose, initialGroupName, onSendMessage }: EmployeeNewQuoteProps) {
@@ -56,6 +56,7 @@ export default function EmployeeNewQuote({ embedded, initialState, onClose, init
   });
 
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
+  const [priceListFile, setPriceListFile] = useState<File | null>(null); // Separate Price List
   const [tssList, setTssList] = useState<{type: string, id: string, tc: string, birthDate: string}[]>([]); 
 
   const [uploadedFile, setUploadedFile] = useState<File | null>(null); // For License AI
@@ -121,7 +122,6 @@ export default function EmployeeNewQuote({ embedded, initialState, onClose, init
     const isSameCategory = isVehicle(prev) && isVehicle(newProduct);
     
     // Only reset if switching categories (e.g. Traffic -> DASK)
-    // "trafik kasko arasında değişiminde hiç bir textboxı sıfırlama"
     if (!isSameCategory) {
         setFormData({
             ad_soyad: '', plaka: '', tc_vkn: '', belge_no: '', sasi_no: '',
@@ -132,6 +132,7 @@ export default function EmployeeNewQuote({ embedded, initialState, onClose, init
         });
         setAttachedFiles([]);
         setUploadedFile(null);
+        setPriceListFile(null);
         setPreviewUrl(null);
         setIsNewCar(false);
         setCompanyPriceInstallment('');
@@ -159,7 +160,6 @@ export default function EmployeeNewQuote({ embedded, initialState, onClose, init
 
   const handlePasteToScan = async () => {
       try {
-          // Check for clipboard permissions or API availability
           if (!navigator.clipboard || !navigator.clipboard.read) {
                throw new Error('Clipboard API not supported');
           }
@@ -168,7 +168,6 @@ export default function EmployeeNewQuote({ embedded, initialState, onClose, init
           let found = false;
           
           for (const item of items) {
-              // Try to find image types
               const imageType = item.types.find(type => type.startsWith('image/'));
               
               if (imageType) {
@@ -178,16 +177,16 @@ export default function EmployeeNewQuote({ embedded, initialState, onClose, init
                   setPreviewUrl(URL.createObjectURL(file));
                   processImage(file);
                   found = true;
-                  return; // Stop after finding first image
+                  return;
               }
           }
           
           if (!found) {
-              toast.error('Panoda resim bulunamadı. Lütfen bir resim kopyaladığınızdan emin olun.');
+              toast.error('Panoda resim bulunamadı.');
           }
       } catch (err) {
           console.error('Paste error:', err);
-          toast.error('Yapıştırma hatası: Tarayıcınız panoya erişime izin vermiyor olabilir.');
+          toast.error('Yapıştırma hatası.');
       }
   };
 
@@ -205,7 +204,7 @@ export default function EmployeeNewQuote({ embedded, initialState, onClose, init
              if (imageType) {
                 const blob = await item.getType(imageType);
                 const file = new File([blob], `fiyat-listesi-${Date.now()}.png`, { type: imageType });
-                setAttachedFiles(prev => [...prev, file]);
+                setPriceListFile(file); // Set as dedicated Price List file
                 pasted = true;
             }
         }
@@ -214,22 +213,18 @@ export default function EmployeeNewQuote({ embedded, initialState, onClose, init
         else toast.error('Panoda resim bulunamadı');
     } catch (err) {
         console.error('Paste error:', err);
-        toast.error('Yapıştırma hatası: Tarayıcınız panoya erişime izin vermiyor olabilir.');
+        toast.error('Yapıştırma hatası.');
     }
   };
 
   const handleCopyQR = () => {
       const text = `${formData.belge_no || ''}-${formData.plaka || ''}-${formData.tc_vkn || ''}`;
-      // Fix: Use navigator.clipboard.writeText correctly, and handle potential absence of navigator.clipboard
       if (navigator.clipboard && navigator.clipboard.writeText) {
           navigator.clipboard.writeText(text)
               .then(() => toast.success('QR Verisi kopyalandı'))
-              .catch(err => {
-                  console.error('Clipboard error:', err);
-                  toast.error('Kopyalama başarısız');
-              });
+              .catch(err => toast.error('Kopyalama başarısız'));
       } else {
-          // Fallback for insecure context or unsupported browsers
+          // Fallback
           try {
               const textArea = document.createElement("textarea");
               textArea.value = text;
@@ -238,9 +233,8 @@ export default function EmployeeNewQuote({ embedded, initialState, onClose, init
               textArea.select();
               document.execCommand('copy');
               document.body.removeChild(textArea);
-              toast.success('QR Verisi kopyalandı (Fallback)');
+              toast.success('QR Verisi kopyalandı');
           } catch (err) {
-              console.error('Fallback clipboard error:', err);
               toast.error('Kopyalama başarısız');
           }
       }
@@ -288,7 +282,7 @@ export default function EmployeeNewQuote({ embedded, initialState, onClose, init
       }`;
   };
 
-  // TSS Logic
+  // TSS/ÖSS Logic
   const handleAddPerson = () => {
       const type = formData.durum_kisi;
       if (type === 'FERT' && tssList.some(p => p.type === 'FERT')) {
@@ -299,7 +293,6 @@ export default function EmployeeNewQuote({ embedded, initialState, onClose, init
           toast.error('Sadece 1 adet EŞ ekleyebilirsiniz.');
           return;
       }
-      // Add current form data values for person
       const newPerson = { 
           type, 
           id: Math.random().toString(),
@@ -309,7 +302,6 @@ export default function EmployeeNewQuote({ embedded, initialState, onClose, init
       
       setTssList([...tssList, newPerson]);
 
-      // Determine next default type
       const nextList = [...tssList, newPerson];
       const hasFert = nextList.some(p => p.type === 'FERT');
       const hasEs = nextList.some(p => p.type === 'EŞ');
@@ -325,7 +317,6 @@ export default function EmployeeNewQuote({ embedded, initialState, onClose, init
       const newList = tssList.filter(p => p.id !== id);
       setTssList(newList);
       
-      // Reset dropdown logic if needed (e.g. if FERT removed, default back to FERT)
       const hasFert = newList.some(p => p.type === 'FERT');
       if (!hasFert) setFormData(prev => ({ ...prev, durum_kisi: 'FERT' }));
   };
@@ -342,8 +333,7 @@ export default function EmployeeNewQuote({ embedded, initialState, onClose, init
   const getExtraInfo = () => {
     let info = '';
     
-    // 1. Ek Notlar - User says: "nottaki şey yazılmış ama NOT: SAMETT olarak yazılmış NOT: bu yazmayacak"
-    // So we just append the note content directly.
+    // 1. Ek Notlar
     if (formData.notlar) info += `${formData.notlar} `;
 
     // 2. Meslek (Kasko)
@@ -352,21 +342,18 @@ export default function EmployeeNewQuote({ embedded, initialState, onClose, init
     // 3. DASK/KONUT/İŞYERİ Detayları
     if (product === 'DASK' || product === 'KONUT' || product === 'İŞYERİ') {
         info += `M2: ${formData.daire_brut_m2 || '-'} YIL: ${formData.bina_insa_yili || '-'} KAT: ${formData.daire_kacinci_kat || '-'}/${formData.bina_toplam_kat || '-'} `;
+        if (product === 'İŞYERİ' && formData.faaliyet) info += `FAALİYET: ${formData.faaliyet} `;
     }
-
+    
     // 4. TSS/ÖSS Detayları
     if (product === 'TSS' || product === 'ÖSS') {
-        // Eş ve Çocuk bilgileri buraya
-        const es = tssList.find(p => p.type === 'EŞ');
-        if (es) info += `EŞ: ${es.tc || ''} ${es.birthDate || ''} `;
-        
-        const cocuklar = tssList.filter(p => p.type === 'ÇOCUK');
-        if (cocuklar.length > 0) {
-            info += 'ÇOCUKLAR: ';
-            cocuklar.forEach((c, idx) => {
-                info += `${idx+1}) ${c.tc || ''} ${c.birthDate || ''} `;
-            });
-        }
+        const parts = [];
+        if (formData.tc_vkn) parts.push(`TC: ${formData.tc_vkn}`); // Main person? Or just list items?
+        // User requested: "EKLENEN BÜTÜN KİŞİLER EŞİ VE ÇOCUKLARIN TC DOĞUM TARİHİ VE EK NOTLAR - EK BİLGİLER / İLETİŞİM"
+        tssList.forEach(p => {
+             parts.push(`${p.type}: ${p.tc} - ${p.birthDate}`);
+        });
+        info += parts.join(' | ');
     }
 
     return info.trim();
@@ -374,22 +361,14 @@ export default function EmployeeNewQuote({ embedded, initialState, onClose, init
 
   const parseDate = (dateStr: string): string | null => {
       if (!dateStr) return null;
-      // User complaint: "TARİ (SAATTE YAZIYOR SADECE TARİH OALCAK)"
-      // Database field is likely timestamptz. We should format it correctly or ensure DB ignores time.
-      // But if user sees it in UI list, UI should format it.
-      // Here we just save ISO string.
-      
       // Format: DD.MM.YYYY
       const parts = dateStr.split('.');
       if (parts.length === 3) {
           const day = parseInt(parts[0], 10);
-          const month = parseInt(parts[1], 10) - 1; // Months are 0-based
+          const month = parseInt(parts[1], 10) - 1; 
           const year = parseInt(parts[2], 10);
           
           if (!isNaN(day) && !isNaN(month) && !isNaN(year)) {
-              // Create date at noon to avoid timezone shift issues causing prev day
-              // We will return formatted YYYY-MM-DD string which Supabase can cast to date/timestamp
-              // This ensures clean date format
               const date = new Date(Date.UTC(year, month, day, 12, 0, 0));
               return date.toISOString().split('T')[0]; // Return YYYY-MM-DD
           }
@@ -402,96 +381,106 @@ export default function EmployeeNewQuote({ embedded, initialState, onClose, init
     setLoading(true);
 
     try {
-        // --- 1. Database Insert ---
+        // --- 1. Prepare Data ---
         let dbBirthDate = parseDate(formData.dogum_tarihi);
         if (!dbBirthDate && formData.tc_vkn && formData.tc_vkn.length === 10) {
-            // Tax number: Default to 01.01.1900 as requested
             dbBirthDate = '1900-01-01';
         }
         
-        let dbEndDate = parseDate(pastEndDate);
+        let dbEndDate = parseDate(pastEndDate); // Past End Date -> 'tarih' column
 
-        const quoteData = {
+        // Mapping Logic
+        const quoteData: any = {
             ad_soyad: formData.ad_soyad,
             dogum_tarihi: dbBirthDate,
-            sirket: pastCompany || '-', // Şirket boşsa -
-            tarih: dbEndDate, // Bitiş Tarihi
+            sirket: pastCompany || '-',
+            tarih: dbEndDate, // "BİTİŞ TARİHİ - TARİH"
+            tanzim_tarihi: new Date().toISOString(), // "Oluşturulma Tarihi"
             sasi: formData.sasi_no, 
-            sasi_no: formData.sasi_no, 
             plaka: formData.plaka,
             tc_vkn: formData.tc_vkn,
-            belge_no: formData.belge_no,
+            belge_no: formData.belge_no, // Mapped per product below if needed
             arac_cinsi: formData.arac_cinsi,
-            brut_prim: null,
+            brut_prim: 0,
             tur: product,
-            kesen_id: user?.id,
-            // İLGİLİ KİŞİ (TALİ) yeri Tali / Grup textboxından alacak -> acente kolonuna
-            misafir_bilgi: { tali_grup: tali }, 
-            acente: tali, 
-            tali: tali, // Save Tali explicitly to the new column
-            police_no: companyPriceInstallment, 
-            kart_bilgisi: null, 
-            ek_bilgiler: getExtraInfo(),
-            net_prim: null,
-            komisyon: null,
+            employee_id: user?.id, // Mapped to employee_id
+            kesen: user?.name, // "TEKLİFİ OLUŞTURAN ÇALIŞAN - KESEN"
+            ilgili_kisi: tali, // "Tali / Grup - İLGİLİ KİŞİ"
+            police_no: companyPriceInstallment, // "Şirket / Fiyat / Taksit - POLİÇE NO"
+            kart: null, // Mapped to kart
+            ek_bilgiler_iletisim: getExtraInfo(), // Mapped to ek_bilgiler_iletisim
+            net_prim: 0,
+            komisyon: 0,
             durum: 'bekliyor'
+            // misafir_bilgi removed as it doesn't exist in DB
         };
+
+        // Product Specific Overrides
+        if (product === 'DASK') {
+            quoteData.belge_no = formData.belge_no; // "DASK POLİÇE NO - BELGE NO"
+            quoteData.arac_cinsi = formData.adres_kodu; // "ADRES KODU - ARAÇ CİNSİ"
+        } else if (product === 'KONUT') {
+            quoteData.belge_no = ''; // "KONUTTA DASK POLİÇE NO YOK ONA GÖRE ORASI BOŞ KALACAK"
+            quoteData.arac_cinsi = formData.adres_kodu;
+        } else if (product === 'İŞYERİ') {
+            quoteData.arac_cinsi = formData.adres_kodu;
+        } else if (product === 'TSS' || product === 'ÖSS') {
+            // Already handled in common mapping + getExtraInfo
+        }
 
         const { error: dbError } = await supabase.from('teklifler').insert(quoteData);
         if (dbError) {
             console.error('DB Insert Error:', dbError);
-            toast.error('Veritabanına kayıt yapılamadı, ancak mesaj gönderiliyor.');
+            toast.error(`Veritabanına kayıt yapılamadı: ${dbError.message} (Mesaj gönderiliyor)`);
         }
 
-        // --- 2. WhatsApp Message ---
-        const messagesToSend: string[] = [];
+        // --- 2. WhatsApp Message Construction (Ordered) ---
+        const itemsToSend: { type: 'text' | 'file', content: string | File }[] = [];
 
-        // Mesaj Formatı:
-        // 1. İSİM SOYİSİM ÜRÜN PLAKA
-        // 2. Şirket / Fiyat / Taksit (Alt satırda)
-        // 3. Mesaj ek not (Alt satırda)
-        
-        let mainMsg = '';
-        
-        // 1. Satır
-        if (formData.ad_soyad) mainMsg += `${formData.ad_soyad} `;
-        mainMsg += `${product} `;
-        
+        // 1. Price List Image
+        if (priceListFile) {
+            itemsToSend.push({ type: 'file', content: priceListFile });
+        }
+
+        // 2. Text 1: NAME SURNAME PLATE PRODUCT
+        let text1 = '';
+        if (formData.ad_soyad) text1 += `${formData.ad_soyad} `;
+        text1 += `${product} `;
         if (product === 'TRAFİK' || product === 'KASKO') {
-            mainMsg += `${formData.plaka}`;
+             text1 += `${formData.plaka}`;
         } else if (product === 'DASK' || product === 'KONUT' || product === 'İŞYERİ') {
-            mainMsg += `\nTC/VKN: ${formData.tc_vkn}`;
-            mainMsg += `\nADRES KODU: ${formData.adres_kodu}`;
-            mainMsg += `\nM2: ${formData.daire_brut_m2} | YIL: ${formData.bina_insa_yili}`;
-            mainMsg += `\nKAT: ${formData.daire_kacinci_kat} / ${formData.bina_toplam_kat}`;
-            if (product === 'İŞYERİ') mainMsg += `\nFAALİYET: ${formData.faaliyet}`;
-        } else if (product === 'TSS' || product === 'ÖSS') {
-            mainMsg += `\nTC: ${formData.tc_vkn}`;
-            mainMsg += `\nKİŞİLER: ${tssList.map(p => `${p.tc} - ${p.birthDate} - ${p.type}`).join('\n')}`;
+             // Maybe add Address code here for text? User said "2. İSİM SOYİSİM PLAKA ÜRÜN" (Generic template)
+             // But for DASK it might differ. I'll stick to the requested format if possible.
+             // If no plaka, skip it.
         }
+        itemsToSend.push({ type: 'text', content: text1.trim() });
 
-        // 2. Satır: Şirket / Fiyat / Taksit
+        // 3. Text 2: Company / Price / Installment
         if (companyPriceInstallment) {
-            mainMsg += `\n${companyPriceInstallment}`;
+            itemsToSend.push({ type: 'text', content: companyPriceInstallment });
         }
 
-        // 3. Satır: Ek Not
-        if (formData.notlar) {
-             mainMsg += `\n${formData.notlar}`; 
+        // 4. Attached Documents (PDFs etc)
+        // User said: "eklenen ruhsatta gruba gidiyor bunu düzeltelim" -> Exclude uploadedFile (License)
+        // Only send attachedFiles
+        if (attachedFiles.length > 0) {
+            attachedFiles.forEach(f => {
+                itemsToSend.push({ type: 'file', content: f });
+            });
         }
 
-        messagesToSend.push(mainMsg.trim());
+        // 5. Notes
+        const extraInfo = getExtraInfo();
+        if (extraInfo) {
+             itemsToSend.push({ type: 'text', content: extraInfo });
+        }
 
-        // Send via Callback
+        // Send
         if (onSendMessage) {
-            // Sadece ekli dosyaları gönder (Fiyat listesi vb.)
-            // Ruhsatı (uploadedFile) GÖNDERME
-            const filesToSend = [...attachedFiles];
-            // if (uploadedFile) filesToSend.unshift(uploadedFile); // REMOVED
-            await onSendMessage(messagesToSend, filesToSend);
+            await onSendMessage(itemsToSend);
         }
         
-        // Reset Form (Keep Product and Tali)
+        // Reset Form
         setFormData({
             ad_soyad: '', plaka: '', tc_vkn: '', belge_no: '', sasi_no: '',
             arac_cinsi: '', motor_no: '', marka_kodu: '', meslek: '',
@@ -501,17 +490,13 @@ export default function EmployeeNewQuote({ embedded, initialState, onClose, init
         });
         setAttachedFiles([]);
         setUploadedFile(null);
+        setPriceListFile(null);
         setPreviewUrl(null);
         setIsNewCar(false);
         setCompanyPriceInstallment('');
         setPastCompany('');
         setPastEndDate('');
         setTssList([]);
-
-        // Close is handled by parent if needed, but user said "ekran kapanıyor sadece textboxlar sıfırlansın"
-        // So we do NOT call onClose() here.
-        // Also remove 'setQuotePanel({ isOpen: false... })' in parent callback? 
-        // Parent callback sets quotePanel false. We need to prevent that.
 
     } catch (error) {
         console.error('Submit error:', error);
@@ -561,7 +546,7 @@ export default function EmployeeNewQuote({ embedded, initialState, onClose, init
         
         {/* 1. Product Tabs */}
         <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
-            {['TRAFİK', 'KASKO', 'DASK', 'KONUT', 'İŞYERİ', 'TSS'].map((p) => (
+            {['TRAFİK', 'KASKO', 'DASK', 'KONUT', 'İŞYERİ', 'TSS', 'ÖSS'].map((p) => (
                 <button
                     key={p}
                     type="button"
@@ -756,9 +741,10 @@ export default function EmployeeNewQuote({ embedded, initialState, onClose, init
         <button
             type="button"
             onClick={handlePastePriceList}
-            className="w-full bg-gray-100 hover:bg-gray-200 text-gray-700 py-2 rounded-lg text-xs font-bold flex items-center justify-center border border-gray-300 border-dashed"
+            className={`w-full py-2 rounded-lg text-xs font-bold flex items-center justify-center border border-dashed transition-colors ${priceListFile ? 'bg-green-50 border-green-400 text-green-700' : 'bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300'}`}
         >
-            <Clipboard size={14} className="mr-2" /> Fiyat Listesi Yapıştır (Görsel)
+            <Clipboard size={14} className="mr-2" /> 
+            {priceListFile ? 'Fiyat Listesi Eklendi (Değiştirmek için tekrar yapıştır)' : 'Fiyat Listesi Yapıştır (Görsel)'}
         </button>
 
         {/* 9. Ek Belgeler */}
@@ -769,8 +755,8 @@ export default function EmployeeNewQuote({ embedded, initialState, onClose, init
             </div>
             <label className="w-full cursor-pointer bg-white border border-gray-300 hover:border-blue-400 text-gray-600 rounded-lg py-2 flex items-center justify-center text-sm transition-all">
                 <Plus size={16} className="mr-2" /> Belge Seç
-                <input type="file" multiple className="hidden" onChange={handleAttachmentChange} />
             </label>
+            <input type="file" multiple className="hidden" onChange={handleAttachmentChange} />
             {attachedFiles.length > 0 && (
                 <div className="mt-2 space-y-1">
                     {attachedFiles.map((f, i) => (

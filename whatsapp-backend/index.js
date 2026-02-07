@@ -13,6 +13,22 @@ app.use(express.json());
 const server = http.createServer(app);
 const io = socket.init(server);
 
+// --- SECURITY MIDDLEWARE ---
+// Verify API_SECRET for all non-root routes
+const authMiddleware = (req, res, next) => {
+    // Skip auth for root health check
+    if (req.path === '/') return next();
+
+    const secret = req.headers['x-api-secret'];
+    if (!secret || secret !== config.apiSecret) {
+        console.warn(`[Security] Unauthorized access attempt from ${req.ip} to ${req.path}`);
+        return res.status(403).json({ error: 'Unauthorized: Invalid or missing API Secret' });
+    }
+    next();
+};
+
+app.use(authMiddleware);
+
 // --- REST API ---
 app.get('/', (req, res) => res.send('Modern WhatsApp Bot Service is Running 🚀'));
 
@@ -310,10 +326,108 @@ db.client
                         }
                         
                         console.log(`[DB Listener] Sending to JID: ${jid}`);
-                        await session.sendMessage(jid, { text: msg.content }); // Fixed: sendMessage content format
                         
-                        await db.updateMessageStatus(msg.id, 'sent');
-                        socket.emit('message_status', { id: msg.id, status: 'sent' });
+                        // Handle Message Type
+                        let msgOptions = {};
+                        
+                        if (msg.type === 'text') {
+                            msgOptions = { text: msg.content };
+                        } else if (msg.type === 'image') {
+                             if (!msg.media_url) throw new Error('Image message missing media_url');
+                             msgOptions = { 
+                                 image: { url: msg.media_url },
+                                 caption: msg.content || ''
+                             };
+                        } else if (msg.type === 'video') {
+                             if (!msg.media_url) throw new Error('Video message missing media_url');
+                             msgOptions = { 
+                                 video: { url: msg.media_url },
+                                 caption: msg.content || ''
+                             };
+                        } else if (msg.type === 'document') {
+                             if (!msg.media_url) throw new Error('Document message missing media_url');
+                             // Try to guess mimetype from content (filename) or default
+                             const fileName = msg.content || 'belge';
+                             let mimetype = 'application/octet-stream';
+                             if (fileName.endsWith('.pdf')) mimetype = 'application/pdf';
+                             else if (fileName.endsWith('.xls') || fileName.endsWith('.xlsx')) mimetype = 'application/vnd.ms-excel';
+                             else if (fileName.endsWith('.doc') || fileName.endsWith('.docx')) mimetype = 'application/msword';
+
+                             msgOptions = { 
+                                 document: { url: msg.media_url },
+                                 fileName: fileName,
+                                 mimetype: mimetype
+                             };
+                        } else {
+                             // Fallback for unknown types
+                             msgOptions = { text: msg.content || '[Desteklenmeyen Mesaj]' };
+                        }
+
+                        // Handle Reply/Quote
+                        
+                        if (msg.quoted_message_id) {
+                            try {
+                                const store = bot.getStore();
+                                let quotedMsg = null;
+
+                                if (store) {
+                                    quotedMsg = await store.loadMessage(jid, msg.quoted_message_id);
+                                }
+
+                                if (quotedMsg) {
+                                    msgOptions.quoted = quotedMsg;
+                                } else {
+                                    console.warn(`[DB Listener] Quoted message ${msg.quoted_message_id} not found in store. Fetching from DB...`);
+                                    
+                                    const { data: dbMsg } = await db.client
+                                        .from('messages')
+                                        .select('sender_phone, content, user_id, whatsapp_message_id')
+                                        .eq('whatsapp_message_id', msg.quoted_message_id)
+                                        .single();
+                                    
+                                    if (dbMsg) {
+                                        let participant = dbMsg.sender_phone;
+                                        // Ensure JID format
+                                        if (!participant.includes('@')) {
+                                            participant = participant + '@s.whatsapp.net';
+                                        }
+
+                                        // Ensure fromMe is correctly calculated
+                                        // We need to check if the SENDER of the quoted message is the current bot user
+                                        const botId = session.user?.id ? session.user.id.split(':')[0].split('@')[0] : '';
+                                        const isQuotedFromMe = dbMsg.sender_phone === botId;
+
+                                        msgOptions.quoted = {
+                                            key: {
+                                                remoteJid: jid,
+                                                fromMe: isQuotedFromMe,
+                                                id: dbMsg.whatsapp_message_id,
+                                                participant: participant
+                                            },
+                                            message: { conversation: dbMsg.content || '...' }
+                                        };
+                                        console.log(`[DB Listener] Fake Quote Key: ${JSON.stringify(msgOptions.quoted.key)}`);
+                                    }
+                                }
+                            } catch (qErr) {
+                                console.error('Error loading quoted message:', qErr);
+                            }
+                        }
+
+                        const sentMsg = await session.sendMessage(jid, msgOptions); 
+                        console.log(`[DB Listener] Sent! WA ID: ${sentMsg.key.id}`);
+
+                        // CRITICAL FIX: Update the existing row with the generated WA ID
+                        // This prevents duplicates when the 'upsert' event comes back from WA
+                        await db.client
+                            .from('messages')
+                            .update({ 
+                                status: 'sent', 
+                                whatsapp_message_id: sentMsg.key.id 
+                            })
+                            .eq('id', msg.id);
+                        
+                        socket.emit('message_status', { id: msg.id, status: 'sent', whatsapp_message_id: sentMsg.key.id });
                     } else {
                          throw new Error(`Session ${sessionUserId} not connected after wait.`);
                     }
@@ -404,4 +518,11 @@ async function autoLoadSessions() {
 server.listen(config.port, () => {
     console.log(`Server listening on port ${config.port}`);
     autoLoadSessions(); // Run on startup
+    
+    // Initial Cleanup
+    db.cleanupOldMessages();
+    // Schedule Cleanup every hour
+    setInterval(() => {
+        db.cleanupOldMessages();
+    }, 60 * 60 * 1000);
 });

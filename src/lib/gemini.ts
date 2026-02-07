@@ -80,8 +80,11 @@ export const analyzePolicyWithGemini = async (file: File) => {
             - komisyon: Acente Komisyon Tutarı (Varsa).
             
             Not:
-            - Acente adı "KOÇ", "ACAR" içeriyorsa tam adını olduğu gibi al.
-            - "WİN" veya "WIN" içeriyorsa "TİMURLAR" olarak al.
+            - ŞİRKET: Eğer şirket adında "SİGORTA" geçiyorsa sil. Sadece ana ismi al. (Örn: "AK SİGORTA" -> "AK", "NEOVA SİGORTA" -> "NEOVA").
+            - ACENTE: 
+              - "KOÇ SİGORTA ARACILIK HİZMETLERİ" veya "KOÇ" içeriyorsa -> "KOÇ"
+              - "WİN GRUP" veya "WIN" içeriyorsa -> "TİMURLAR"
+              - "NESA SİGORTA" veya "NESA" içeriyorsa -> "NESA"
             - Tarihleri KESİNLİKLE GG.AA.YYYY formatında döndür (Örn: 24.08.2026). Asla YYYY-MM-DD kullanma.
             - Sayısal değerlerde binlik ayracı kullanma, ondalık ayracı olarak VİRGÜL (,) kullan. (Örn: 15000,50).
             

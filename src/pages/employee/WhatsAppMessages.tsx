@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef, useLayoutEffect, useMemo } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
-import { Search, Send, Paperclip, FileText, User, Users, ChevronDown, X, ZoomIn, ZoomOut, RotateCcw, Filter, Car, Ban, RefreshCw } from 'lucide-react';
-import { format } from 'date-fns';
+import { Search, Send, Paperclip, FileText, User, Users, ChevronDown, X, ZoomIn, ZoomOut, RotateCcw, Filter, Car, Ban, RefreshCw, CheckCircle, Download } from 'lucide-react';
+import { format, isToday } from 'date-fns';
 import { useNavigate, useSearchParams, useLocation } from 'react-router-dom'; // Import useSearchParams
 import EmployeeNewQuote from './NewQuote';
 
@@ -21,31 +21,213 @@ interface ChatGroupMember {
 }
 
 interface Message {
-    id: string;
-    sender_phone: string;
-    sender_name?: string;
-    direction: 'inbound' | 'outbound';
-    type: 'text' | 'image';
-    content: string;
-    media_url: string | null;
-    created_at: string;
-    group_id?: string;
-    user_id?: string;
-}
+        id: string;
+        whatsapp_message_id?: string; // Added
+        quoted_message_id?: string; // Added
+        sender_phone: string;
+        sender_name?: string;
+        direction: 'inbound' | 'outbound';
+        type: 'text' | 'image' | 'document'; // Added document
+        content: string;
+        media_url: string | null;
+        created_at: string;
+        group_id?: string;
+        user_id?: string;
+    }
 
 interface EmployeeGroup {
     id: string;
     name: string;
 }
 
-export default function WhatsAppMessages() {
+// Helper Component for Individual Messages
+const MessageItem = ({ 
+    msg, 
+    member, 
+    user, 
+    messages,
+    onContextMenu, 
+    onOpenViewer, 
+    onSetQuotePanel, 
+    onDownload,
+    onToast
+}: {
+    msg: Message,
+    member?: ChatGroupMember,
+    user: any,
+    messages: Message[],
+    onContextMenu: (e: React.MouseEvent, msg: Message) => void,
+    onOpenViewer: (url: string) => void,
+    onSetQuotePanel: (data: any) => void,
+    onDownload: (url: string, filename: string) => void,
+    onToast: (msg: string) => void
+}) => {
+    const [imageLoaded, setImageLoaded] = useState(false);
+
+    // Helper to format sender name (Local version)
+    const getSenderLabel = () => {
+         if (msg.direction === 'outbound') {
+             return user?.name || 'Ben';
+         }
+         if (member?.name && member.name !== member.phone) return member.name;
+         if (msg.sender_name) return msg.sender_name;
+         let phone = msg.sender_phone || '';
+         if (phone.includes(':')) phone = phone.split(':')[0];
+         if (phone.length > 15) return 'WhatsApp Kullanıcısı';
+         return phone; 
+    };
+
+    return (
+        <div 
+            id={`msg-${msg.id}`}
+            className={`flex flex-col ${msg.direction === 'outbound' ? 'items-end' : 'items-start'}`}
+        >
+            <span className="text-[10px] text-gray-600 mb-0.5 px-1 font-medium">
+                {getSenderLabel()}
+            </span>
+            <div 
+                className={`max-w-[70%] rounded-lg p-3 shadow-sm relative ${
+                    msg.direction === 'outbound' ? 'bg-[#d9fdd3] rounded-tr-none' : 'bg-white rounded-tl-none'
+                }`}
+                onContextMenu={(e) => onContextMenu(e, msg)}
+            >
+                {/* Quoted Message Display */}
+                {msg.quoted_message_id && (
+                    <div className={`mb-2 p-2 rounded text-xs border-l-4 bg-opacity-50 ${
+                        msg.direction === 'outbound' 
+                            ? 'bg-green-100 border-green-600 text-gray-700' 
+                            : 'bg-gray-100 border-gray-400 text-gray-700'
+                    }`}>
+                        {(() => {
+                            const quoted = messages.find(m => m.whatsapp_message_id === msg.quoted_message_id || m.id === msg.quoted_message_id);
+                            return quoted ? (
+                                <div className="cursor-pointer" onClick={(e) => {
+                                    e.stopPropagation();
+                                    const el = document.getElementById(`msg-${quoted.id}`);
+                                    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                }}>
+                                    <span className="font-bold block mb-0.5 text-[10px] text-blue-600">{quoted.sender_name || quoted.sender_phone}</span>
+                                    <span className="line-clamp-2">{quoted.content || (quoted.type === 'image' ? '📷 Görsel' : '...')}</span>
+                                </div>
+                            ) : (
+                                <span className="italic">Alıntılanan mesaj yüklenemedi</span>
+                            );
+                        })()}
+                    </div>
+                )}
+
+                {msg.type === 'image' && msg.media_url && (
+                    <div className="mb-2 flex flex-col">
+                        <img 
+                            src={msg.media_url} 
+                            alt="Görsel" 
+                            onLoad={() => setImageLoaded(true)}
+                            onClick={() => onOpenViewer(msg.media_url!)}
+                            className={`rounded-lg max-h-60 object-cover cursor-pointer hover:opacity-90 transition-opacity ${imageLoaded ? 'block' : 'hidden'}`}
+                            title="Büyütmek için sol tık, Menü için sağ tık"
+                        />
+                        {!imageLoaded && (
+                            <div className="h-40 w-40 bg-gray-100 rounded-lg flex items-center justify-center animate-pulse">
+                                <span className="text-gray-400 text-xs">Yükleniyor...</span>
+                            </div>
+                        )}
+                        
+                        {/* Buttons - Only show when image is loaded */}
+                        {imageLoaded && msg.direction === 'inbound' && (
+                            <div className="flex gap-1 mt-2 animate-in fade-in duration-300">
+                                <button 
+                                    onClick={() => {
+                                        onSetQuotePanel({
+                                            isOpen: true,
+                                            data: {
+                                                source: 'whatsapp',
+                                                imageUrl: msg.media_url!,
+                                                customerPhone: msg.sender_phone,
+                                                quoteType: 'TRAFİK',
+                                                autoScan: true
+                                            }
+                                        });
+                                    }}
+                                    className="flex-1 bg-blue-600 hover:bg-blue-700 text-white text-[10px] py-1 rounded flex items-center justify-center transition-colors font-medium shadow-sm"
+                                >
+                                    <FileText size={12} className="mr-1" />
+                                    TRAFİK
+                                </button>
+                                <button 
+                                    onClick={() => {
+                                        onSetQuotePanel({
+                                            isOpen: true,
+                                            data: {
+                                                source: 'whatsapp',
+                                                imageUrl: msg.media_url!,
+                                                customerPhone: msg.sender_phone,
+                                                quoteType: 'KASKO',
+                                                autoScan: true
+                                            }
+                                        });
+                                    }}
+                                    className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] py-1 rounded flex items-center justify-center transition-colors font-medium shadow-sm"
+                                >
+                                    <Car size={12} className="mr-1" />
+                                    KASKO
+                                </button>
+                                <button 
+                                    onClick={() => {
+                                        onToast('İptal özelliği yakında eklenecek.');
+                                    }}
+                                    className="flex-1 bg-red-600 hover:bg-red-700 text-white text-[10px] py-1 rounded flex items-center justify-center transition-colors font-medium shadow-sm"
+                                >
+                                    <Ban size={12} className="mr-1" />
+                                    İPTAL
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {/* Document Display */}
+                {msg.type === 'document' && (
+                    <div 
+                        className="mb-2 p-3 bg-gray-50 border border-gray-200 rounded-lg flex items-center gap-3 min-w-[200px] cursor-pointer hover:bg-gray-100 transition-colors"
+                        onClick={() => msg.media_url && onDownload(msg.media_url, msg.content || 'belge')}
+                        title="İndirmek için tıklayın"
+                    >
+                        <div className="w-10 h-10 bg-red-100 rounded-lg flex items-center justify-center text-red-600 shrink-0">
+                            <FileText size={20} />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                            <div className="text-sm font-medium text-gray-900 truncate" title={msg.content}>
+                                {msg.content || 'Belge'}
+                            </div>
+                            <div className="text-xs text-gray-500">PDF / Belge (İndir)</div>
+                        </div>
+                        <Download size={16} className="text-gray-400" />
+                    </div>
+                )}
+
+                {/* Fallback for broken images or text messages */}
+                {msg.content && <p className="text-sm text-gray-800 whitespace-pre-wrap">{msg.content}</p>}
+                
+                <span className="text-[10px] text-gray-500 block text-right mt-1">
+                    {isToday(new Date(msg.created_at)) 
+                        ? format(new Date(msg.created_at), 'HH:mm')
+                        : format(new Date(msg.created_at), 'dd.MM.yyyy HH:mm')
+                    }
+                </span>
+            </div>
+        </div>
+    );
+};
+
+export default function WhatsAppMessages({ embedded, initialGroupId, hideSidebar }: { embedded?: boolean, initialGroupId?: string | null, hideSidebar?: boolean }) {
     const { user } = useAuth();
     const navigate = useNavigate();
     const location = useLocation();
     const [searchParams] = useSearchParams(); // Hook
     
+    const [searchTerm, setSearchTerm] = useState(''); // Search State
     const [groups, setGroups] = useState<ChatGroup[]>([]);
-    const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
+    const [selectedGroupId, setSelectedGroupId] = useState<string | null>(initialGroupId || null);
     const [groupMembers, setGroupMembers] = useState<ChatGroupMember[]>([]);
     const [selectedTargetMember, setSelectedTargetMember] = useState<ChatGroupMember | null>(null);
     
@@ -53,6 +235,7 @@ export default function WhatsAppMessages() {
     const [messagesLoading, setMessagesLoading] = useState(false);
     const [newMessage, setNewMessage] = useState('');
     const messagesEndRef = useRef<HTMLDivElement>(null);
+    const fileInputRef = useRef<HTMLInputElement>(null);
 
     // Group Filter State
     const [employeeGroups, setEmployeeGroups] = useState<EmployeeGroup[]>([]);
@@ -78,10 +261,26 @@ export default function WhatsAppMessages() {
     // Current Group Details State (Fix for "Alıcı" glitch)
     const [currentGroup, setCurrentGroup] = useState<ChatGroup | null>(null);
 
+    // Reply & Context Menu State
+    const [replyingTo, setReplyingTo] = useState<Message | null>(null);
+    const [contextMenu, setContextMenu] = useState<{ x: number, y: number, msg: Message } | null>(null);
+
+    // Close context menu on click
+    useEffect(() => {
+        const handleClick = () => setContextMenu(null);
+        window.addEventListener('click', handleClick);
+        return () => window.removeEventListener('click', handleClick);
+    }, []);
+
     // WhatsApp Connection State
     const [isWhatsAppConnected, setIsWhatsAppConnected] = useState<boolean | null>(null);
     const [myPhone, setMyPhone] = useState<string | null>(null);
     const [activeSessionPhone, setActiveSessionPhone] = useState<string | null>(null); // NEW: The phone actually handling this chat
+
+    // Sync initialGroupId if provided (e.g. from QuoteDetail)
+    useEffect(() => {
+        if (initialGroupId) setSelectedGroupId(initialGroupId);
+    }, [initialGroupId]);
 
     // Check for openQuotePanel in navigation state or query params
     useEffect(() => {
@@ -158,6 +357,45 @@ export default function WhatsAppMessages() {
         return () => { supabase.removeChannel(channel); };
     }, [user]);
 
+    // NEW: Mark All as Read Function (Global)
+    async function markAllAsRead() {
+        try {
+            // 1. Optimistic Update: Clear ALL unread counts in metadata
+            setGroupsMetadata(prev => {
+                const newState = { ...prev };
+                Object.keys(newState).forEach(key => {
+                    if (newState[key]) {
+                        newState[key] = { ...newState[key], unreadCount: 0 };
+                    }
+                });
+                return newState;
+            });
+
+            // 2. Server Update: Mark ALL inbound messages as read
+            const { error } = await supabase
+                .from('messages')
+                .update({ status: 'read' })
+                .eq('direction', 'inbound')
+                .neq('status', 'read');
+            
+            if (error) throw error;
+            showToast('Tüm mesajlar okundu olarak işaretlendi.');
+            
+            // 3. Force refresh metadata to be sure
+            setTimeout(() => {
+                // Trigger a re-fetch of metadata
+                // We can do this by just calling the effect logic again or relying on the optimistic update
+                // Since we don't have the function exposed, we rely on the optimistic update
+                // But we can trigger a groups refresh which triggers metadata refresh
+                fetchChatGroups();
+            }, 1000);
+
+        } catch (error) {
+            console.error('Mark all read error:', error);
+            showToast('İşlem başarısız.');
+        }
+    }
+
     // 1. Initial Data Fetch (Employee Groups & My Groups)
     useEffect(() => {
         if (user && isWhatsAppConnected) fetchInitialData();
@@ -201,8 +439,8 @@ export default function WhatsAppMessages() {
             fetchChatGroups();
         }
     }, [activeFilter, myGroupIds]); 
-
-    // --- SORTED GROUPS LOGIC ---
+    
+    // ... SORTED GROUPS LOGIC ...
     // Task 1: Sort groups by unread status (top) and then by last message time (descending)
     // We need to fetch last message time for each group to do this effectively.
     // For now, let's assume 'updated_at' on group reflects activity, OR we fetch it.
@@ -260,12 +498,18 @@ export default function WhatsAppMessages() {
                 meta[m.group_id!].unreadCount++;
             });
 
-            // Process Last Message (Simple approximation from what we have or 'updated_at')
-            // To do this properly without N+1 queries, we should rely on `updated_at` of the group
-            // assuming the bot updates it. If not, we might need to fix the bot.
-            // Let's assume for now `updated_at` is NOT reliable for messages.
-            
-            // For now, let's just sort by unread count first.
+            // Process Last Message
+            // Since lastMsgData is ordered by group_id then created_at desc, 
+            // the first occurrence of a group_id is its latest message.
+            const seenGroups = new Set();
+            lastMsgData?.forEach(m => {
+                if (!seenGroups.has(m.group_id)) {
+                    seenGroups.add(m.group_id);
+                    if (!meta[m.group_id!]) meta[m.group_id!] = { unreadCount: 0, lastMessageTime: '' };
+                    meta[m.group_id!].lastMessageTime = m.created_at;
+                }
+            });
+
             setGroupsMetadata(meta);
         };
 
@@ -277,48 +521,70 @@ export default function WhatsAppMessages() {
     }, [groups]);
 
     const sortedGroups = useMemo(() => {
-        return [...groups].sort((a, b) => {
+        let result = [...groups];
+
+        if (searchTerm.trim()) {
+            const lowerTerm = searchTerm.toLowerCase();
+            result = result.filter(g => g.name.toLowerCase().includes(lowerTerm));
+        }
+
+        return result.sort((a, b) => {
             const metaA = groupsMetadata[a.id] || { unreadCount: 0, lastMessageTime: '' };
             const metaB = groupsMetadata[b.id] || { unreadCount: 0, lastMessageTime: '' };
 
-            // 1. Unread groups first
+            // 1. Sort by Time (Newest First)
+            const timeA = metaA.lastMessageTime ? new Date(metaA.lastMessageTime).getTime() : 0;
+            const timeB = metaB.lastMessageTime ? new Date(metaB.lastMessageTime).getTime() : 0;
+
+            if (timeA !== timeB) return timeB - timeA;
+
+            // 2. Unread groups (if times are equal, unlikely but good fallback)
             if (metaA.unreadCount > 0 && metaB.unreadCount === 0) return -1;
             if (metaA.unreadCount === 0 && metaB.unreadCount > 0) return 1;
 
-            // 2. Then by name (as fallback until we have reliable last_message_at)
+            // 3. Then by name
             return a.name.localeCompare(b.name);
         });
-    }, [groups, groupsMetadata]);
+    }, [groups, groupsMetadata, searchTerm]);
 
     async function fetchChatGroups() {
         try {
             let query = supabase.from('chat_groups').select('*').order('name');
 
-            if (activeFilter === 'my_groups') {
-                if (myGroupIds.length === 0) {
-                    // If employee has no assigned groups, show nothing? 
-                    // OR show groups explicitly added to (via chat_group_members)?
-                    // For now, empty list is correct based on logic.
-                    query = query.in('assigned_employee_group_id', []); 
+            // Employee: STRICT FILTER - Only show Assigned Groups
+            if (user?.role !== 'admin') {
+                if (activeFilter === 'private') {
+                    // Show DMs (Private chats)
+                    query = query.eq('is_whatsapp_group', false);
                 } else {
-                    query = query.in('assigned_employee_group_id', myGroupIds);
-                }
-            } else if (activeFilter === 'all') {
-                if (user?.role !== 'admin') {
-                     // Employee "All" view: 
-                     // Show assigned groups (via categories) AND groups where I am explicitly a member?
-                     // Currently only showing assigned categories for simplicity.
-                     if (myGroupIds.length > 0) {
-                         query = query.in('assigned_employee_group_id', myGroupIds);
-                     } else {
-                         // Fallback: If no category assigned, maybe show nothing
+                    // Show Assigned Groups (Work Groups)
+                    // "Tümü" for employee means "All Assigned Groups"
+                    if (myGroupIds.length === 0) {
                          query = query.in('id', []);
-                     }
+                    } else {
+                         query = query.in('assigned_employee_group_id', myGroupIds);
+                         query = query.eq('is_whatsapp_group', true); // Only real groups in main list
+                    }
                 }
-                // Admin sees all, no filter needed
-            } else {
-                // Specific Employee Group
-                query = query.eq('assigned_employee_group_id', activeFilter);
+            } 
+            // Admin: Filter based on Tabs
+            else {
+                if (activeFilter === 'private') {
+                     // Show DMs
+                     query = query.eq('is_whatsapp_group', false);
+                } else if (activeFilter === 'my_groups') {
+                     // For Admin, 'Grubum' might mean nothing or everything?
+                     // Let's assume admins don't have assigned_employee_group_id usually.
+                     query = query.in('assigned_employee_group_id', []); 
+                } else if (activeFilter === 'all') {
+                    // Admin sees all GROUPS (excluding DMs to keep clean, or both?)
+                    // Let's show only Groups in "All" to separate from "Private"
+                    query = query.eq('is_whatsapp_group', true);
+                } else {
+                    // Specific Employee Group
+                    query = query.eq('assigned_employee_group_id', activeFilter);
+                    query = query.eq('is_whatsapp_group', true);
+                }
             }
 
             const { data } = await query;
@@ -328,10 +594,12 @@ export default function WhatsAppMessages() {
             const lastId = localStorage.getItem('lastOpenedGroupId');
             const lastGroupExists = data?.find(g => g.id === lastId);
 
-            if (lastId && lastGroupExists) {
-                 setSelectedGroupId(lastId);
-            } else if (data && data.length === 1 && !selectedGroupId) {
-                setSelectedGroupId(data[0].id);
+            if (!initialGroupId) {
+                if (lastId && lastGroupExists) {
+                    setSelectedGroupId(lastId);
+                } else if (data && data.length === 1 && !selectedGroupId) {
+                    setSelectedGroupId(data[0].id);
+                }
             }
 
         } catch (error) {
@@ -678,22 +946,41 @@ export default function WhatsAppMessages() {
             };
             setMessages(prev => [...prev, tempMsg]);
             setNewMessage('');
+            setReplyingTo(null); // Clear reply
             
             // Scroll will happen automatically via useLayoutEffect
 
-            const { error } = await supabase.from('messages').insert({
+            const messageData: any = {
                 group_id: selectedGroupId,
                 sender_phone: selectedTargetMember.phone,
                 direction: 'outbound',
                 type: 'text',
                 content: tempMsg.content,
                 status: 'pending',
-                user_id: user?.id // Add user_id to insert
-            });
+                user_id: user?.id, // Add user_id to insert
+            };
 
-            if (error) throw error;
+            // Only add quoted_message_id if replying (to avoid schema error if column missing)
+            if (replyingTo?.whatsapp_message_id) {
+                 messageData.quoted_message_id = replyingTo.whatsapp_message_id;
+            }
+
+            const { error } = await supabase.from('messages').insert(messageData);
+
+            if (error) {
+                // If error is missing column, retry without it
+                if (error.code === 'PGRST204' || error.message.includes('quoted_message_id')) {
+                    console.warn('Schema mismatch: quoted_message_id missing. Retrying without quote...');
+                    delete messageData.quoted_message_id;
+                    const { error: retryError } = await supabase.from('messages').insert(messageData);
+                    if (retryError) throw retryError;
+                } else {
+                    throw error;
+                }
+            }
         } catch (error) {
             console.error('Send error:', error);
+            showToast('Mesaj gönderilemedi.');
         }
     };
 
@@ -764,6 +1051,28 @@ export default function WhatsAppMessages() {
         }
     };
 
+    const handleDownload = async (url: string, filename: string) => {
+        try {
+            const response = await fetch(url);
+            const blob = await response.blob();
+            const blobUrl = URL.createObjectURL(blob);
+            
+            const a = document.createElement('a');
+            a.href = blobUrl;
+            a.download = filename; // This forces the browser to download instead of open
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(blobUrl);
+            
+            showToast('Dosya indiriliyor...');
+        } catch (error) {
+            console.error('Download error:', error);
+            // Fallback: Open in new tab
+            window.open(url, '_blank');
+        }
+    };
+
     const openViewer = (url: string) => {
         setViewerImage(url);
         setZoomLevel(1);
@@ -792,105 +1101,138 @@ export default function WhatsAppMessages() {
 
     const handleMouseUp = () => setIsDragging(false);
 
-    const handleSendQuoteResponse = async (textMessages: string[], files: File[]) => {
+    const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (e.target.files && e.target.files.length > 0) {
+            // Legacy support or direct file send
+            const files = Array.from(e.target.files);
+            const items = files.map(f => ({ type: 'file' as const, content: f }));
+            await handleSendQuoteResponse(items);
+            // Reset input
+            if (fileInputRef.current) fileInputRef.current.value = '';
+        }
+    };
+
+    const handleSendQuoteResponse = async (items: { type: 'text' | 'file', content: string | File }[]) => {
         if (!selectedGroupId || !selectedTargetMember) {
             showToast('Grup veya kişi seçili değil!');
             return;
         }
+        
+        setReplyingTo(null); // Clear reply state
 
         try {
-            // 1. Send Text Messages
-            for (const text of textMessages) {
-                if (!text) continue;
-                
-                // Optimistic UI
-                const tempId = 'temp-' + Date.now() + Math.random();
-                setMessages(prev => [...prev, {
-                    id: tempId,
-                    sender_phone: selectedTargetMember.phone,
-                    direction: 'outbound',
-                    type: 'text',
-                    content: text,
-                    media_url: null,
-                    created_at: new Date().toISOString()
-                }]);
-
-                const { error } = await supabase.from('messages').insert({
-                    group_id: selectedGroupId,
-                    sender_phone: selectedTargetMember.phone,
-                    direction: 'outbound',
-                    type: 'text',
-                    content: text,
-                    status: 'pending',
-                    user_id: user?.id
-                });
-
-                if (error) console.error('Error sending text:', error);
-            }
-
-            // 2. Upload and Send Files
-            for (const file of files) {
-                // If the file is just a blob without name (like from clipboard), give it a name
-                const originalName = file.name || 'image.png';
-                const fileExt = originalName.split('.').pop() || 'png';
-                const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`;
-                const filePath = `${selectedGroupId}/${fileName}`;
-
-                // Ensure file has type
-                const fileOptions = {
-                    cacheControl: '3600',
-                    upsert: false,
-                    contentType: file.type || 'image/png'
-                };
-
-                const { error: uploadError } = await supabase.storage
-                    .from('chat-media')
-                    .upload(filePath, file, fileOptions);
-
-                if (uploadError) {
-                    console.error('Upload error:', uploadError);
-                    showToast(`Dosya yüklenemedi: ${uploadError.message}`);
-                    continue;
+            for (const item of items) {
+                // Add a small delay between messages to ensure order
+                if (items.indexOf(item) > 0) {
+                    await new Promise(resolve => setTimeout(resolve, 1500));
                 }
 
-                const { data: { publicUrl } } = supabase.storage
-                    .from('chat-media')
-                    .getPublicUrl(filePath);
+                if (item.type === 'text') {
+                    const text = item.content as string;
+                    if (!text) continue;
 
-                // Optimistic UI for Image
-                const tempId = 'temp-img-' + Date.now() + Math.random();
-                
-                // Do NOT add to local state here if realtime subscription is active, 
-                // as it will cause duplicate (echo). 
-                // But we want immediate feedback.
-                // We'll rely on our dedup logic in realtime listener.
-                
-                setMessages(prev => [...prev, {
-                    id: tempId,
-                    sender_phone: selectedTargetMember.phone,
-                    direction: 'outbound',
-                    type: 'image', 
-                    content: '',
-                    media_url: publicUrl,
-                    created_at: new Date().toISOString()
-                }]);
+                    // Optimistic UI
+                    const tempId = 'temp-' + Date.now() + Math.random();
+                    setMessages(prev => [...prev, {
+                        id: tempId,
+                        sender_phone: selectedTargetMember.phone,
+                        direction: 'outbound',
+                        type: 'text',
+                        content: text,
+                        media_url: null,
+                        created_at: new Date().toISOString()
+                    }]);
 
-                const { error: msgError } = await supabase.from('messages').insert({
-                    group_id: selectedGroupId,
-                    sender_phone: selectedTargetMember.phone,
-                    direction: 'outbound',
-                    type: 'image',
-                    content: '',
-                    media_url: publicUrl,
-                    status: 'pending',
-                    user_id: user?.id
-                });
-                 if (msgError) console.error('Error sending file msg:', msgError);
+                    const { error } = await supabase.from('messages').insert({
+                        group_id: selectedGroupId,
+                        sender_phone: selectedTargetMember.phone,
+                        direction: 'outbound',
+                        type: 'text',
+                        content: text,
+                        status: 'pending',
+                        user_id: user?.id,
+                        quoted_message_id: replyingTo?.whatsapp_message_id || null
+                    });
+
+                    if (error) console.error('Error sending text:', error);
+
+                } else if (item.type === 'file') {
+                    const file = item.content as File;
+                    // If the file is just a blob without name (like from clipboard), give it a name
+                    const originalName = file.name || 'image.png';
+                    const fileExt = originalName.split('.').pop() || 'png';
+                    const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`;
+                    const filePath = `${selectedGroupId}/${fileName}`;
+
+                    // Ensure file has type
+                    const fileOptions = {
+                        cacheControl: '3600',
+                        upsert: false,
+                        contentType: file.type || 'image/png'
+                    };
+
+                    const { error: uploadError } = await supabase.storage
+                        .from('chat-media')
+                        .upload(filePath, file, fileOptions);
+
+                    if (uploadError) {
+                        console.error('Upload error:', uploadError);
+                        showToast(`Dosya yüklenemedi: ${uploadError.message}`);
+                        continue;
+                    }
+
+                    const { data: { publicUrl } } = supabase.storage
+                        .from('chat-media')
+                        .getPublicUrl(filePath);
+
+                    // Determine type based on file
+                    let msgType = 'document';
+                    if (file.type.startsWith('image/')) msgType = 'image';
+                    else if (file.type.startsWith('video/')) msgType = 'video';
+                    else if (file.type.startsWith('audio/')) msgType = 'audio';
+
+                    // Optimistic UI for File
+                    const tempId = 'temp-file-' + Date.now() + Math.random();
+                    
+                    setMessages(prev => [...prev, {
+                        id: tempId,
+                        sender_phone: selectedTargetMember.phone,
+                        direction: 'outbound',
+                        type: msgType as any, 
+                        content: msgType === 'document' ? originalName : '',
+                        media_url: publicUrl,
+                        created_at: new Date().toISOString()
+                    }]);
+
+                    const msgData: any = {
+                        group_id: selectedGroupId,
+                        sender_phone: selectedTargetMember.phone,
+                        direction: 'outbound',
+                        type: msgType,
+                        content: msgType === 'document' ? originalName : '',
+                        media_url: publicUrl,
+                        status: 'pending',
+                        user_id: user?.id
+                    };
+                    
+                    if (replyingTo?.whatsapp_message_id) {
+                         msgData.quoted_message_id = replyingTo.whatsapp_message_id;
+                    }
+
+                    const { error: msgError } = await supabase.from('messages').insert(msgData);
+                    
+                     if (msgError) {
+                          if (msgError.code === 'PGRST204' || msgError.message.includes('quoted_message_id')) {
+                              delete msgData.quoted_message_id;
+                              await supabase.from('messages').insert(msgData);
+                          } else {
+                              console.error('Error sending file msg:', msgError);
+                          }
+                     }
+                }
             }
             
             showToast('Teklif ve belgeler gönderildi!');
-            // DO NOT close panel
-            // setQuotePanel({ isOpen: false, data: null }); 
 
         } catch (error) {
             console.error('Send quote error:', error);
@@ -933,11 +1275,13 @@ export default function WhatsAppMessages() {
     return (
         <div className={`flex h-full bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden ${quotePanel.isOpen ? 'fixed inset-0 z-50 rounded-none' : 'relative'}`}>
             {/* Sidebar: Groups - Fixed width 320px, hidden on small screens if quote open */}
-            <div className={`w-[320px] shrink-0 border-r border-gray-200 flex-col bg-gray-50 ${quotePanel.isOpen ? 'hidden lg:flex' : 'flex'}`}>
+            {!hideSidebar && (
+            <div className={`w-[250px] shrink-0 border-r border-gray-200 flex-col bg-gray-50 ${quotePanel.isOpen ? 'hidden lg:flex' : 'flex'}`}>
                 {/* Filter Tabs */}
                 <div className="px-3 pt-3 pb-1 bg-white border-b border-gray-100">
                     <div className="flex space-x-2 overflow-x-auto pb-2 scrollbar-hide">
                         <button 
+                            type="button"
                             onClick={() => setActiveFilter('all')}
                             className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all border ${
                                 activeFilter === 'all' 
@@ -948,8 +1292,21 @@ export default function WhatsAppMessages() {
                             Tümü
                         </button>
                         
+                        <button 
+                            type="button"
+                            onClick={() => setActiveFilter('private')}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all border ${
+                                activeFilter === 'private' 
+                                    ? 'bg-purple-600 text-white border-purple-600' 
+                                    : 'bg-white text-purple-600 border-purple-100 hover:border-purple-200'
+                            }`}
+                        >
+                            ÖZEL
+                        </button>
+
                         {myGroupIds.length > 0 && (
                             <button 
+                                type="button"
                                 onClick={() => setActiveFilter('my_groups')}
                                 className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all border ${
                                     activeFilter === 'my_groups' 
@@ -966,6 +1323,7 @@ export default function WhatsAppMessages() {
                             .map(eg => (
                             <button 
                                 key={eg.id}
+                                type="button"
                                 onClick={() => setActiveFilter(eg.id)}
                                 className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all border ${
                                     activeFilter === eg.id 
@@ -980,14 +1338,23 @@ export default function WhatsAppMessages() {
                 </div>
 
                 <div className="p-4 border-b border-gray-200 bg-white">
-                    <div className="relative">
+                    <div className="relative mb-2">
                         <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
                         <input 
                             type="text" 
                             placeholder="Grup Ara..." 
                             className="w-full pl-10 pr-4 py-2 bg-gray-100 border-none rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                            value={searchTerm}
+                            onChange={(e) => setSearchTerm(e.target.value)}
                         />
                     </div>
+                    <button
+                        onClick={markAllAsRead}
+                        className="w-full py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs font-medium rounded-lg flex items-center justify-center gap-2 transition-colors"
+                    >
+                        <CheckCircle size={14} />
+                        Tümünü Okundu İşaretle
+                    </button>
                 </div>
                 <div className="flex-1 overflow-y-auto">
                     {/* Show loading or empty state if filter not ready */}
@@ -1006,19 +1373,22 @@ export default function WhatsAppMessages() {
                                 <div 
                                     key={g.id}
                                     onClick={() => setSelectedGroupId(g.id)}
-                                    className={`p-4 flex items-center cursor-pointer hover:bg-white transition-colors border-b border-gray-100 ${selectedGroupId === g.id ? 'bg-white border-l-4 border-l-blue-600 shadow-sm' : ''} ${meta.unreadCount > 0 ? 'bg-green-50' : ''}`}
+                                    className={`p-4 flex items-center cursor-pointer hover:bg-white transition-colors border-b border-gray-100 
+                                        ${selectedGroupId === g.id ? 'bg-white border-l-4 border-l-blue-600 shadow-sm' : ''} 
+                                        ${meta.unreadCount > 0 ? 'bg-red-50 border-l-4 border-l-red-500' : ''}
+                                    `}
                                 >
-                                    <div className="relative w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center text-blue-600 font-bold mr-3">
+                                    <div className={`relative w-10 h-10 rounded-lg flex items-center justify-center font-bold mr-3 ${meta.unreadCount > 0 ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'}`}>
                                         <Users size={20} />
                                         {meta.unreadCount > 0 && (
-                                            <span className="absolute -top-2 -right-2 bg-red-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full shadow-sm">
+                                            <span className="absolute -top-2 -right-2 bg-red-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full shadow-sm animate-pulse">
                                                 {meta.unreadCount}
                                             </span>
                                         )}
                                     </div>
                                     <div className="flex-1 min-w-0">
-                                        <h3 className={`font-semibold truncate ${meta.unreadCount > 0 ? 'text-gray-900 font-bold' : 'text-gray-700'}`}>{g.name}</h3>
-                                        {meta.unreadCount > 0 && <span className="text-[10px] text-green-600 font-medium">Yeni Mesaj</span>}
+                                        <h3 className={`font-semibold truncate ${meta.unreadCount > 0 ? 'text-red-900 font-bold' : 'text-gray-700'}`}>{g.name}</h3>
+                                        {meta.unreadCount > 0 && <span className="text-[10px] text-red-600 font-bold">Yeni Mesaj</span>}
                                     </div>
                                 </div>
                             );
@@ -1026,6 +1396,7 @@ export default function WhatsAppMessages() {
                     )}
                 </div>
             </div>
+            )}
 
             {/* Chat Area - Flexible width */}
             <div className="flex-1 min-w-0 flex flex-col bg-[#e5ddd5] relative">
@@ -1054,12 +1425,13 @@ export default function WhatsAppMessages() {
                         </div>
                         <div>
                             <h3 className="font-bold text-gray-800 flex items-center gap-2">
-                                {currentGroup?.name || groups.find(g => g.id === selectedGroupId)?.name || 'Grup Seçiniz'}
+                                {/* Use DB name (groups array) as priority, fallback to currentGroup name which might be from sync */}
+                                {groups.find(g => g.id === selectedGroupId)?.name || currentGroup?.name || 'Grup Seçiniz'}
                             </h3>
                             <div className="flex items-center text-xs text-gray-500">
                                 {(currentGroup?.group_jid || groups.find(g => g.id === selectedGroupId)?.group_jid) ? (
                                     <span className="text-gray-600 italic">
-                                        <span className="font-semibold text-green-600">{currentGroup?.name || groups.find(g => g.id === selectedGroupId)?.name}</span> grubuna mesaj gönderiyorsunuz
+                                        <span className="font-semibold text-green-600">{groups.find(g => g.id === selectedGroupId)?.name || currentGroup?.name}</span> grubuna mesaj gönderiyorsunuz
                                     </span>
                                 ) : (
                                     <div className="flex items-center gap-1">
@@ -1086,132 +1458,53 @@ export default function WhatsAppMessages() {
                             </div>
                         </div>
                     </div>
+                    {/* Mark All Read Button */}
+                    <button 
+                        onClick={markAllAsRead}
+                        className="text-gray-500 hover:text-blue-600 p-2 rounded-full hover:bg-gray-100 transition-colors"
+                        title="Tümünü Okundu Yap"
+                    >
+                        <CheckCircle size={20} />
+                    </button>
                 </div>
 
                 {/* Messages */}
                 <div className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0 relative z-0">
                     {filteredMessages.map((msg) => {
                         const member = groupMembers.find(m => m.phone === msg.sender_phone);
-                        // Priority: Manually assigned name -> WhatsApp PushName -> Phone
-                        // Fix: If outbound, we want to show who we sent it TO (which is the target group/member)
-                        // OR if it's a group chat, we just show "Ben" or the user's name?
-                        // Actually, for outbound, "Kime: X" usually means the recipient.
-                        
-    // Helper to format sender name
-     const getSenderLabel = (msg: Message, member?: ChatGroupMember) => {
-         if (msg.direction === 'outbound') {
-             return user?.name || 'Ben';
-         }
-         
-         // 1. Check if we have a mapped member name in our DB (Explicitly set name)
-         if (member?.name && member.name !== member.phone) return member.name;
-         
-         // 2. Use WhatsApp PushName (sender_name) if available (Notify Name)
-         if (msg.sender_name) return msg.sender_name;
-         
-         // 3. Fallback to formatting the phone number
-         let phone = msg.sender_phone || '';
-         if (phone.includes(':')) phone = phone.split(':')[0];
-         
-         // If it's a long numeric ID (LID) or doesn't look like a phone, don't show the raw number
-         if (phone.length > 15) return 'WhatsApp Kullanıcısı';
-         
-         return phone; 
-     };
-
-    // ... inside render loop ...
-    
                         return (
-                            <div 
-                                key={msg.id} 
-                                className={`flex flex-col ${msg.direction === 'outbound' ? 'items-end' : 'items-start'}`}
-                            >
-                                <span className="text-[10px] text-gray-600 mb-0.5 px-1 font-medium">
-                                    {getSenderLabel(msg, member)}
-                                </span>
-                                <div className={`max-w-[70%] rounded-lg p-3 shadow-sm relative ${
-                                    msg.direction === 'outbound' ? 'bg-[#d9fdd3] rounded-tr-none' : 'bg-white rounded-tl-none'
-                                }`}>
-                                    {msg.type === 'image' && msg.media_url && (
-                                        <div className="mb-2">
-                                            <img 
-                                                src={msg.media_url} 
-                                                alt="Görsel" 
-                                                onClick={() => openViewer(msg.media_url!)}
-                                                onContextMenu={(e) => {
-                                                    e.preventDefault();
-                                                    handleCopyImage(msg.media_url!);
-                                                }}
-                                                className="rounded-lg max-h-60 object-cover cursor-pointer hover:opacity-90 transition-opacity"
-                                                title="Büyütmek için sol tık, Kopyalamak için sağ tık"
-                                            />
-                                            {msg.direction === 'inbound' && (
-                                                <div className="flex gap-1 mt-2">
-                                                    <button 
-                                                        onClick={() => {
-                                                            setQuotePanel({
-                                                                isOpen: true,
-                                                                data: {
-                                                                    source: 'whatsapp',
-                                                                    imageUrl: msg.media_url!,
-                                                                    customerPhone: msg.sender_phone,
-                                                                    quoteType: 'TRAFİK',
-                                                                    autoScan: true
-                                                                }
-                                                            });
-                                                        }}
-                                                        className="flex-1 bg-blue-600 hover:bg-blue-700 text-white text-[10px] py-1 rounded flex items-center justify-center transition-colors font-medium shadow-sm"
-                                                    >
-                                                        <FileText size={12} className="mr-1" />
-                                                        TRAFİK
-                                                    </button>
-                                                    <button 
-                                                        onClick={() => {
-                                                            setQuotePanel({
-                                                                isOpen: true,
-                                                                data: {
-                                                                    source: 'whatsapp',
-                                                                    imageUrl: msg.media_url!,
-                                                                    customerPhone: msg.sender_phone,
-                                                                    quoteType: 'KASKO',
-                                                                    autoScan: true
-                                                                }
-                                                            });
-                                                        }}
-                                                        className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] py-1 rounded flex items-center justify-center transition-colors font-medium shadow-sm"
-                                                    >
-                                                        <Car size={12} className="mr-1" />
-                                                        KASKO
-                                                    </button>
-                                                    <button 
-                                                        onClick={() => {
-                                                            // TODO: Implement Cancel Logic
-                                                            showToast('İptal özelliği yakında eklenecek.');
-                                                        }}
-                                                        className="flex-1 bg-red-600 hover:bg-red-700 text-white text-[10px] py-1 rounded flex items-center justify-center transition-colors font-medium shadow-sm"
-                                                    >
-                                                        <Ban size={12} className="mr-1" />
-                                                        İPTAL
-                                                    </button>
-                                                </div>
-                                            )}
-                                        </div>
-                                    )}
-
-                                    {/* Fallback for broken images or text messages */}
-                                    {msg.content && <p className="text-sm text-gray-800 whitespace-pre-wrap">{msg.content}</p>}
-                                    
-                                    <span className="text-[10px] text-gray-500 block text-right mt-1">
-                                        {format(new Date(msg.created_at), 'HH:mm')}
-                                    </span>
-                                </div>
-                            </div>
+                            <MessageItem 
+                                key={msg.id}
+                                msg={msg}
+                                member={member}
+                                user={user}
+                                messages={messages}
+                                onContextMenu={(e, m) => {
+                                    e.preventDefault();
+                                    setContextMenu({ x: e.clientX, y: e.clientY, msg: m });
+                                }}
+                                onOpenViewer={openViewer}
+                                onSetQuotePanel={setQuotePanel}
+                                onDownload={handleDownload}
+                                onToast={showToast}
+                            />
                         );
                     })}
                     <div ref={messagesEndRef} />
                 </div>
 
                 {/* Input Area */}
+                {replyingTo && (
+                    <div className="bg-gray-50 p-2 border-t border-gray-200 flex justify-between items-center animate-in slide-in-from-bottom-2 z-20 relative">
+                        <div className="flex-1 border-l-4 border-blue-500 pl-2">
+                            <span className="text-xs font-bold text-blue-600 block">{replyingTo.sender_name || replyingTo.sender_phone}</span>
+                            <span className="text-xs text-gray-500 line-clamp-1">{replyingTo.content || (replyingTo.type === 'image' ? '📷 Görsel' : '...')}</span>
+                        </div>
+                        <button onClick={() => setReplyingTo(null)} className="p-1 hover:bg-gray-200 rounded-full transition-colors">
+                            <X size={16} className="text-gray-500" />
+                        </button>
+                    </div>
+                )}
                 <div className="p-3 bg-white border-t border-gray-200">
                     {!isMemberOfCurrentGroup && selectedGroupId ? (
                         <div className="flex items-center justify-center p-2 bg-red-50 border border-red-100 rounded-lg text-red-600 text-sm font-medium">
@@ -1220,7 +1513,15 @@ export default function WhatsAppMessages() {
                         </div>
                     ) : (
                         <form onSubmit={handleSendMessage} className="flex items-center space-x-2">
-                            <button type="button" className="p-2 text-gray-500 hover:bg-gray-100 rounded-full">
+                            <input 
+                                type="file" 
+                                ref={fileInputRef} 
+                                className="hidden" 
+                                onChange={handleFileSelect} 
+                                multiple 
+                                accept="image/*,application/pdf,video/*"
+                            />
+                            <button type="button" onClick={() => fileInputRef.current?.click()} className="p-2 text-gray-500 hover:bg-gray-100 rounded-full">
                                 <Paperclip size={20} />
                             </button>
                             <input 
@@ -1299,8 +1600,8 @@ export default function WhatsAppMessages() {
                 </div>
             )}
 
-            {/* Right Quote Panel - Fixed width 400px */}
-            {quotePanel.isOpen && (
+            {/* Right Quote Panel - Fixed width 400px - Hide if Embedded */}
+            {quotePanel.isOpen && !embedded && (
                 <div className="w-[400px] shrink-0 bg-white flex flex-col border-l border-gray-200 overflow-y-auto animate-in slide-in-from-right-10 duration-300">
                     <EmployeeNewQuote 
                         embedded={true} 
@@ -1309,6 +1610,51 @@ export default function WhatsAppMessages() {
                         initialGroupName={groups.find(g => g.id === (quotePanel.data?.groupId || selectedGroupId))?.name}
                         onSendMessage={handleSendQuoteResponse}
                     />
+                </div>
+            )}
+
+            {/* Context Menu */}
+            {contextMenu && (
+                <div 
+                    className="fixed bg-white shadow-xl rounded-lg py-1 z-[100] border border-gray-200 min-w-[160px]"
+                    style={{ top: contextMenu.y, left: contextMenu.x }}
+                    onClick={(e) => e.stopPropagation()}
+                >
+                    <button 
+                        className="w-full text-left px-4 py-2.5 hover:bg-gray-50 text-sm text-gray-700 flex items-center transition-colors"
+                        onClick={() => {
+                            setReplyingTo(contextMenu.msg);
+                            setContextMenu(null);
+                        }}
+                    >
+                        <RotateCcw size={16} className="mr-3 text-blue-600" />
+                        Yanıtla
+                    </button>
+                    {(contextMenu.msg.media_url) && (
+                        <button 
+                            className="w-full text-left px-4 py-2.5 hover:bg-gray-50 text-sm text-gray-700 flex items-center transition-colors"
+                            onClick={() => {
+                                handleDownload(contextMenu.msg.media_url!, contextMenu.msg.content || 'dosya');
+                                setContextMenu(null);
+                            }}
+                        >
+                            <Download size={16} className="mr-3 text-green-600" />
+                            {contextMenu.msg.type === 'document' ? 'Belgeyi İndir' : 'Medyayı İndir'}
+                        </button>
+                    )}
+                    {contextMenu.msg.content && (
+                         <button 
+                             className="w-full text-left px-4 py-2.5 hover:bg-gray-50 text-sm text-gray-700 flex items-center transition-colors"
+                             onClick={() => {
+                                 navigator.clipboard.writeText(contextMenu.msg.content);
+                                 setContextMenu(null);
+                                 showToast('Metin kopyalandı');
+                             }}
+                         >
+                             <FileText size={16} className="mr-3 text-gray-500" />
+                             Kopyala
+                         </button>
+                    )}
                 </div>
             )}
         </div>

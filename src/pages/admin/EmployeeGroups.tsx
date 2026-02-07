@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
-import { Plus, Trash2, Users, UserPlus, X, Briefcase, MessageSquare, Save } from 'lucide-react';
+import { Plus, Trash2, Users, UserPlus, X, Briefcase, MessageSquare, Save, Search } from 'lucide-react';
 import { toast } from 'react-hot-toast';
+import { useDebounce } from '@/hooks/useDebounce';
 
 interface EmployeeGroup {
     id: string;
@@ -190,6 +191,10 @@ function GroupMembersModal({ group, onClose }: { group: EmployeeGroup; onClose: 
     const [initialAssignedChatGroupIds, setInitialAssignedChatGroupIds] = useState<string[]>([]);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
+    
+    // Search State for WhatsApp Groups
+    const [searchTerm, setSearchTerm] = useState('');
+    const debouncedSearchTerm = useDebounce(searchTerm, 300);
 
     useEffect(() => {
         fetchData();
@@ -295,6 +300,11 @@ function GroupMembersModal({ group, onClose }: { group: EmployeeGroup; onClose: 
         }
     };
 
+    // Filter Chat Groups
+    const filteredChatGroups = chatGroups.filter(chat => 
+        chat.name.toLowerCase().includes(debouncedSearchTerm.toLowerCase())
+    );
+
     return (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
             <div className="bg-white rounded-xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col shadow-2xl">
@@ -362,7 +372,22 @@ function GroupMembersModal({ group, onClose }: { group: EmployeeGroup; onClose: 
                                     <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-4 text-sm text-yellow-800">
                                         <p>Seçilen WhatsApp grupları bu çalışan grubuna atanacaktır. Bir grup başka bir yere atanmışsa buraya taşınır.</p>
                                     </div>
-                                    {chatGroups.map(chat => {
+                                    
+                                    {/* Search Bar for WhatsApp Groups */}
+                                    <div className="relative mb-3">
+                                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                            <Search className="h-4 w-4 text-gray-400" />
+                                        </div>
+                                        <input
+                                            type="text"
+                                            placeholder="WhatsApp grubu ara..."
+                                            className="block w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg text-sm leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                                            value={searchTerm}
+                                            onChange={(e) => setSearchTerm(e.target.value)}
+                                        />
+                                    </div>
+
+                                    {filteredChatGroups.map(chat => {
                                         const isAssignedToOthers = chat.assigned_employee_group_id && chat.assigned_employee_group_id !== group.id;
                                         const isSelected = assignedChatGroupIds.includes(chat.id);
                                         
@@ -393,7 +418,7 @@ function GroupMembersModal({ group, onClose }: { group: EmployeeGroup; onClose: 
                                             </div>
                                         );
                                     })}
-                                    {chatGroups.length === 0 && <p className="text-center text-gray-500 py-8">Sistemde WhatsApp grubu bulunamadı.</p>}
+                                    {filteredChatGroups.length === 0 && <p className="text-center text-gray-500 py-8">{searchTerm ? 'Aramanıza uygun grup bulunamadı.' : 'Sistemde WhatsApp grubu bulunamadı.'}</p>}
                                 </div>
                             )}
                         </>

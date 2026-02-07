@@ -62,8 +62,8 @@ export default function EmployeeDashboard() {
       // Apply date filter ONLY if dates are valid
       if (startStr && endStr) {
           quotesQuery = quotesQuery
-            .gte('tarih', startStr)
-            .lte('tarih', endStr);
+            .gte('created_at', startStr)
+            .lte('created_at', endStr);
       }
       
       const { count: quotesCount, error: quotesError } = await quotesQuery;
@@ -86,8 +86,8 @@ export default function EmployeeDashboard() {
         
       if (startStr && adjustedEndStr) {
           quotesFinalQuery = quotesFinalQuery
-            .gte('tarih', startStr)
-            .lte('tarih', adjustedEndStr);
+            .gte('created_at', startStr)
+            .lte('created_at', adjustedEndStr);
       }
 
       const { count: quotesCountFinal, error: quotesFinalError } = await quotesFinalQuery;
@@ -95,7 +95,8 @@ export default function EmployeeDashboard() {
       if (!isMounted) return;
 
       if (quotesFinalError) {
-           if (quotesFinalError.message !== 'FetchError: The user aborted a request.') {
+           // Ignore ERR_ABORTED logs which are just cancellations
+           if (quotesFinalError.message !== 'FetchError: The user aborted a request.' && !quotesFinalError.message.includes('ABORTED')) {
                console.error('Error fetching quotes stats final:', quotesFinalError);
            }
       }
@@ -108,8 +109,8 @@ export default function EmployeeDashboard() {
 
       if (startStr && adjustedEndStr) {
           policiesQuery = policiesQuery
-            .gte('tarih', startStr)
-            .lte('tarih', adjustedEndStr);
+            .gte('created_at', startStr)
+            .lte('created_at', adjustedEndStr);
       }
 
       const { data: policiesData, error: policiesError } = await policiesQuery;
@@ -117,7 +118,7 @@ export default function EmployeeDashboard() {
       if (!isMounted) return;
 
       if (policiesError) {
-           if (policiesError.message !== 'FetchError: The user aborted a request.') {
+           if (policiesError.message !== 'FetchError: The user aborted a request.' && !policiesError.message.includes('ABORTED')) {
                console.error('Error fetching policies stats:', policiesError);
            }
       }

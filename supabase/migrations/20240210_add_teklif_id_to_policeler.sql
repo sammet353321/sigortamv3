@@ -1,0 +1,4 @@
+
+ALTER TABLE policeler 
+ADD COLUMN IF NOT EXISTS teklif_id UUID REFERENCES teklifler(id),
+ADD COLUMN IF NOT EXISTS misafir_bilgi JSONB;

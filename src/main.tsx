@@ -2,6 +2,18 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
 import './index.css'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+
+// Create a client
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 1000 * 60 * 5, // 5 minutes
+      gcTime: 1000 * 60 * 30, // 30 minutes
+      refetchOnWindowFocus: false,
+    },
+  },
+});
 
 // Environment Variable Check
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
@@ -27,7 +39,9 @@ if (!supabaseUrl || !supabaseKey) {
 } else {
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
-      <App />
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>
     </StrictMode>,
   )
 }

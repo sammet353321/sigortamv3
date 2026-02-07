@@ -65,19 +65,75 @@ module.exports = {
     async updateMessageStatus(id, status) {
         return await supabase.from('messages').update({ status }).eq('id', id);
     },
+    async ensureGroup(jid, name) {
+        // 1. Check if group exists
+        const { data: existing } = await supabase
+            .from('chat_groups')
+            .select('id')
+            .eq('group_jid', jid)
+            .single();
+
+        if (existing) return existing.id;
+
+        // 2. Create if not exists (System / Auto creation)
+        const { data: newGroup, error } = await supabase
+            .from('chat_groups')
+            .insert({
+                group_jid: jid,
+                name: name || 'Bilinmeyen Grup',
+                is_whatsapp_group: true,
+                status: 'active',
+                created_by: null, // System created (or we could pass a user ID if needed)
+                updated_at: new Date().toISOString()
+            })
+            .select('id')
+            .single();
+
+        if (error) {
+            console.error('[DB] ensureGroup failed:', error.message);
+            return null;
+        }
+        return newGroup.id;
+    },
     async syncGroups(userId, groups) {
         if (!groups || groups.length === 0) return {};
 
         // Fetch current user's role to see if they are admin
-        const { data: profile } = await supabase
-            .from('profiles')
+        const { data: profile, error: profileError } = await supabase
+            .from('users')
             .select('role')
             .eq('id', userId)
             .single();
         
-        const isAdmin = profile?.role === 'admin';
+        if (profileError) {
+            console.warn(`[Sync] Profile fetch error for ${userId}:`, profileError.message);
+        }
+        
+        // FAIL-SAFE: If role is unknown/missing, treat as ADMIN to prevent data loss.
+        // The "Employee" restriction should only apply if we are SURE they are an employee.
+        const role = profile?.role || 'unknown';
+        const isAdmin = role === 'admin' || role === 'unknown'; 
 
-        console.log(`[Sync] Syncing groups for user ${userId} (Role: ${profile?.role || 'unknown'}).`);
+        console.log(`[Sync] Syncing groups for user ${userId} (Role: ${role}). Treated as Admin: ${isAdmin}`);
+
+        // IF NOT ADMIN, DO NOT CREATE/UPDATE GROUPS (Just Map Existing)
+        // Employees should not clutter DB with their personal groups.
+        if (!isAdmin) {
+             console.log(`[Sync] User ${userId} is not admin. Skipping group creation/update.`);
+             const groupJids = groups.map(g => g.id);
+             
+             // Fetch existing groups to build map
+             const { data: existingGroups } = await supabase
+                .from('chat_groups')
+                .select('id, group_jid')
+                .in('group_jid', groupJids);
+
+             const map = {};
+             existingGroups?.forEach(g => {
+                 map[g.group_jid] = g.id;
+             });
+             return map;
+        }
 
         const groupUuidMap = {}; // Map JID -> UUID
 
@@ -278,4 +334,19 @@ module.exports = {
         if (error) console.error('Cleanup Error:', error);
         */
     },
+    async cleanupOldMessages() {
+        try {
+            // Delete messages older than 2 days
+            const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+            const { error, count } = await supabase
+                .from('messages')
+                .delete({ count: 'exact' })
+                .lt('created_at', twoDaysAgo);
+            
+            if (error) console.error('[DB] Cleanup failed:', error.message);
+            else console.log(`[DB] Cleanup: Deleted ${count || 0} messages older than 2 days.`);
+        } catch (err) {
+            console.error('[DB] Cleanup error:', err);
+        }
+    }
 };

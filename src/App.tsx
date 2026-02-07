@@ -10,6 +10,7 @@ import AdminQuotesPage from "@/pages/admin/Quotes";
 import AdminPoliciesPage from "@/pages/admin/Policies";
 import ManagementPage from "@/pages/admin/Management";
 import AdminEmployeesPage from "@/pages/admin/Employees";
+import AdminSubAgentsPage from "@/pages/admin/SubAgents"; // Import the SubAgents page
 import UsersPage from "@/pages/admin/Users";
 import EmployeeDashboard from "@/pages/employee/Dashboard";
 import EmployeeQuoteDetail from "@/pages/employee/QuoteDetail";
@@ -50,7 +51,7 @@ export default function App() {
                   <Route path="/admin/management" element={<ManagementPage />} />
                   <Route path="/admin/quotes" element={<AdminQuotesPage />} />
                   <Route path="/admin/policies" element={<AdminPoliciesPage />} />
-                  <Route path="/admin/sub-agents" element={<div className="p-8 text-center text-gray-500 text-xl">Taliler Sayfası (Yakında)</div>} />
+                  <Route path="/admin/sub-agents" element={<AdminSubAgentsPage />} />
                   <Route path="/admin/whatsapp-connection" element={<WhatsAppConnection />} />
                 </Route>
 

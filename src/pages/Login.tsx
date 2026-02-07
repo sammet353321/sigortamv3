@@ -13,17 +13,9 @@ export default function Login() {
 
   // Clear session on mount to fix stuck states
   useEffect(() => {
-    const clearSession = async () => {
-        try {
-            await supabase.auth.signOut();
-            localStorage.removeItem('sb-aqubbkxsfwmhfbolkfah-auth-token');
-        } catch (e) {
-            console.warn('Session clear warning:', e);
-            // Force remove anyway
-            localStorage.removeItem('sb-aqubbkxsfwmhfbolkfah-auth-token');
-        }
-    };
-    clearSession();
+    // Only clear local storage, do not trigger network signOut to avoid ERR_ABORTED
+    const projectId = import.meta.env.VITE_SUPABASE_URL?.split('//')[1]?.split('.')[0] || 'aqubbkxsfwmhfbolkfah';
+    localStorage.removeItem(`sb-${projectId}-auth-token`);
   }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -40,13 +32,8 @@ export default function Login() {
           throw new Error('Lütfen e-posta ve şifrenizi giriniz.');
       }
 
-      // Clear any stale session first to avoid conflicts
-      try {
-        await supabase.auth.signOut();
-      } catch (signOutError) {
-        console.warn('Sign out failed, proceeding with login:', signOutError);
-      }
-
+      // Supabase handles session replacement automatically, no need to force signOut here
+      
       const { data, error } = await supabase.auth.signInWithPassword({
         email,
         password,

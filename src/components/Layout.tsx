@@ -94,9 +94,9 @@ export default function Layout() {
     { label: 'Teklifler', path: '/admin/quotes', icon: FileText, roles: ['admin'] },
     { label: 'Poliçeler', path: '/admin/policies', icon: Shield, roles: ['admin'] },
     { label: 'Taliler', path: '/admin/sub-agents', icon: Users, roles: ['admin'] },
+    { label: 'Çalışanlar', path: '/admin/employees', icon: BarChart3, roles: ['admin'] },
     { label: 'WhatsApp Bağla', path: '/admin/whatsapp-connection', icon: Smartphone, roles: ['admin'] },
     { label: 'Yönetim', path: '/admin/management', icon: Users, roles: ['admin'] },
-    { label: 'Çalışanlar', path: '/admin/employees', icon: BarChart3, roles: ['admin'] },
     
     // Employee Routes
     { label: 'Mesajlar', path: '/employee/messages', icon: MessageCircle, roles: ['employee'] },
@@ -123,6 +123,8 @@ export default function Layout() {
       {/* Main Container */}
       <div className="flex h-screen overflow-hidden w-full">
         {/* Sidebar - Desktop */}
+        {/* Hide sidebar if on Quote Detail page (Policy Finalization) */}
+        {!location.pathname.match(/\/employee\/quotes\/[^/]+$/) && (
         <aside className="hidden md:flex md:flex-col w-64 bg-slate-900 text-white relative z-20">
             {/* Header */}
             <div className="p-4 flex items-center space-x-2 border-b border-blue-800/50">
@@ -190,6 +192,7 @@ export default function Layout() {
               </button>
             </div>
         </aside>
+        )}
 
         {/* Main Content Area */}
         <div className="flex-1 flex flex-col min-w-0 bg-gray-50">
