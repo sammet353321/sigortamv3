@@ -1,22 +1,32 @@
-import { useState, useEffect } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/lib/supabase';
+import { useAuth } from '@/context/AuthContext';
 import { Shield } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 
 export default function Login() {
+  const isMounted = useRef(true);
+  const { user } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
 
-  // Clear session on mount to fix stuck states
   useEffect(() => {
-    // Only clear local storage, do not trigger network signOut to avoid ERR_ABORTED
-    const projectId = import.meta.env.VITE_SUPABASE_URL?.split('//')[1]?.split('.')[0] || 'aqubbkxsfwmhfbolkfah';
-    localStorage.removeItem(`sb-${projectId}-auth-token`);
+    return () => { isMounted.current = false; };
   }, []);
+
+  // Redirect if user is already logged in or just logged in
+  useEffect(() => {
+    if (user) {
+      if (user.role === 'admin') navigate('/admin/dashboard', { replace: true });
+      else if (user.role === 'employee') navigate('/employee/dashboard', { replace: true });
+      else if (user.role === 'sub_agent') navigate('/sub-agent/dashboard', { replace: true });
+      else navigate('/unauthorized', { replace: true });
+    }
+  }, [user, navigate]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -27,61 +37,159 @@ export default function Login() {
     setLoading(true);
     setError(null);
 
+    // Global Safety Timeout
+    const safetyTimeout = setTimeout(() => {
+        if (isMounted.current && loading) {
+             console.warn('Login process timed out (safety trigger)');
+             setLoading(false);
+             toast.error('İşlem zaman aşımına uğradı.');
+        }
+    }, 15000); // 15 seconds
+
     try {
       if (!email || !password) {
           throw new Error('Lütfen e-posta ve şifrenizi giriniz.');
       }
 
-      // Supabase handles session replacement automatically, no need to force signOut here
-      
-      const { data, error } = await supabase.auth.signInWithPassword({
+      // Wrap signIn in a race with timeout
+      const signInPromise = supabase.auth.signInWithPassword({
         email,
         password,
       });
+      
+      const timeoutPromise = new Promise<{ data: { user: null; session: null }; error: any }>((_, reject) => 
+          setTimeout(() => reject(new Error('Supabase request timed out')), 10000)
+      );
+
+      const { data, error } = await Promise.race([signInPromise, timeoutPromise]);
 
       if (error) throw error;
 
-      if (data.session) {
-        // Fetch user role to redirect
-        const { data: userData, error: roleError } = await supabase
-          .from('users')
-          .select('role')
-          .eq('id', data.session.user.id)
-          .single();
-        
-        if (roleError) {
-            console.error('Role fetch error:', roleError);
-            // Default to unauthorized or show error
-            throw new Error('Kullanıcı rolü bulunamadı.');
-        }
+      await checkRoleAndRedirect(data.session.user.id);
 
-        if (userData) {
-          const role = userData.role;
-          if (role === 'admin') navigate('/admin/dashboard', { replace: true });
-          else if (role === 'employee') navigate('/employee/dashboard', { replace: true });
-          else if (role === 'sub_agent') navigate('/sub-agent/dashboard', { replace: true });
-          else navigate('/unauthorized', { replace: true });
-        }
-      }
     } catch (err: any) {
       console.error('Login error:', err);
+      
+      // Handle AbortError specifically
+      if (err?.name === 'AbortError' || err?.message?.includes('AbortError') || err?.message?.includes('signal is aborted')) {
+        console.warn('Login request aborted, checking session status...');
+        
+        try {
+            // Check if we actually have a session despite the abort
+            const { data: { session } } = await supabase.auth.getSession();
+            if (session?.user) {
+                console.log('Session active despite abort, proceeding with redirect logic...');
+                try {
+                    await checkRoleAndRedirect(session.user.id);
+                } catch (recoveryErr) {
+                    console.error('Recovery redirect failed:', recoveryErr);
+                    setLoading(false);
+                    toast.error('Giriş işlemi tamamlanamadı (kurtarma hatası).');
+                }
+                return;
+            }
+        } catch (sessionCheckErr) {
+            console.warn('Session check after abort failed:', sessionCheckErr);
+        }
+        
+        setLoading(false);
+        // Optional: toast.error('Bağlantı kesildi, lütfen tekrar deneyin.');
+        return;
+      }
+
+      setLoading(false); // Only stop loading on error
+
       let errorMessage = 'Giriş yapılırken bir hata oluştu.';
       
-      if (err.message === 'Invalid login credentials') {
+      if (err?.message === 'Invalid login credentials') {
         errorMessage = 'Hatalı e-posta veya şifre.';
-      } else if (err.message.includes('Email not confirmed')) {
+      } else if (err?.message?.includes('Email not confirmed')) {
         errorMessage = 'E-posta adresi doğrulanmamış. Lütfen yöneticinizle iletişime geçin.';
-      } else if (err.message.includes('Email logins are disabled')) {
+      } else if (err?.message?.includes('Email logins are disabled')) {
         errorMessage = 'E-posta ile giriş sistemi kapalı.';
+      } else if (err?.message === 'Supabase request timed out') {
+        errorMessage = 'Sunucu yanıt vermedi, lütfen internet bağlantınızı kontrol edip tekrar deneyin.';
       } else {
-        errorMessage = err.message;
+        errorMessage = err?.message || 'Bilinmeyen bir hata oluştu.';
       }
       
       setError(errorMessage);
       toast.error(errorMessage);
     } finally {
-      setLoading(false);
+        clearTimeout(safetyTimeout);
     }
+  };
+
+  const checkRoleAndRedirect = async (userId: string) => {
+      // Manual Role Check with Retry Strategy
+      let retries = 3;
+      let userData = null;
+      
+      while (retries > 0 && !userData) {
+          try {
+              if (!isMounted.current) break;
+              
+              const { data, error: roleError } = await supabase
+                .from('users')
+                .select('role')
+                .eq('id', userId)
+                .single();
+                
+              if (roleError) {
+                  if (roleError?.message?.includes('AbortError') || roleError?.message?.includes('signal is aborted')) {
+                      console.warn(`Role fetch aborted, retrying... (${retries} left)`);
+                      retries--;
+                      await new Promise(resolve => setTimeout(resolve, 500)); // Wait 500ms before retry
+                      continue;
+                  }
+                  throw roleError;
+              }
+              
+              userData = data;
+          } catch (err) {
+              console.error('Role fetch attempt failed:', err);
+              retries--;
+              if (retries === 0) throw err; // Throw on last failure
+              await new Promise(resolve => setTimeout(resolve, 500));
+          }
+      }
+
+      if (userData && isMounted.current) {
+          const role = userData.role;
+          if (role === 'admin') navigate('/admin/dashboard', { replace: true });
+          else if (role === 'employee') navigate('/employee/dashboard', { replace: true });
+          else if (role === 'sub_agent') navigate('/sub-agent/dashboard', { replace: true });
+          else navigate('/unauthorized', { replace: true });
+          return;
+      }
+      
+      // If we fall through here, wait for AuthContext or Timeout
+      
+      // Safety timeout: If redirect doesn't happen within 3 seconds (reduced from 5), try manual force
+      setTimeout(async () => {
+          if (isMounted.current) {
+               // Last ditch effort: check session and user state
+               const { data: { session } } = await supabase.auth.getSession();
+               if (session) {
+                   // If we have a session but stuck, maybe user cache is empty?
+                   // Try to force navigation if we know the role (impossible without DB, but let's try reading from cache)
+                   const cached = localStorage.getItem('app_user_cache');
+                   if (cached) {
+                       const u = JSON.parse(cached);
+                       if (u.role === 'employee') {
+                           navigate('/employee/dashboard', { replace: true });
+                           return;
+                       }
+                   }
+                   
+                   setLoading(false);
+                   toast.error('Giriş başarılı ancak yönlendirme yapılamadı. Sayfayı yenileyiniz.');
+               } else {
+                   setLoading(false);
+                   toast.error('Giriş işlemi zaman aşımına uğradı.');
+               }
+          }
+      }, 3000);
   };
 
   return (

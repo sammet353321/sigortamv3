@@ -133,9 +133,9 @@ export default function EmployeesPage() {
             quotesQuery = quotesQuery.in('employee_id', memberIds);
         }
 
-        // Apply Date Filters
-        policiesQuery = policiesQuery.gte('tarih', startStr).lte('tarih', endStr);
-        quotesQuery = quotesQuery.gte('tarih', startStr).lte('tarih', endStr);
+        // Apply Date Filters - Use created_at for performance stats instead of tarih (Expiry)
+        policiesQuery = policiesQuery.gte('created_at', startStr + 'T00:00:00').lte('created_at', endStr + 'T23:59:59');
+        quotesQuery = quotesQuery.gte('created_at', startStr + 'T00:00:00').lte('created_at', endStr + 'T23:59:59');
 
         const [policiesRes, quotesRes] = await Promise.all([policiesQuery, quotesQuery]);
 

@@ -29,6 +29,8 @@ import { Toaster } from 'react-hot-toast';
 
 import EmployeePolicyCut from "@/pages/employee/PolicyCut";
 import EmployeeRenewalsPage from "@/pages/employee/Renewals";
+import EmployeeExpiredPoliciesPage from "@/pages/employee/ExpiredPolicies";
+import AIChatWidget from "@/components/AIChatWidget";
 
 export default function App() {
   return (
@@ -65,6 +67,7 @@ export default function App() {
                   <Route path="/employee/quotes/:id" element={<EmployeeQuoteDetail />} />
                   <Route path="/employee/policies/cut/:id" element={<EmployeePolicyCut />} /> {/* New Route */}
                   <Route path="/employee/renewals" element={<EmployeeRenewalsPage />} /> {/* New Route */}
+                  <Route path="/employee/expired-policies" element={<EmployeeExpiredPoliciesPage />} />
                   <Route path="/employee/policies" element={<EmployeePoliciesPage />} />
                   <Route path="/employee/policies/:id" element={<EmployeePolicyDetail />} />
                 </Route>
@@ -80,6 +83,7 @@ export default function App() {
               </Route>
             </Route>
           </Routes>
+          <AIChatWidget />
         </Router>
       </NotificationProvider>
     </AuthProvider>

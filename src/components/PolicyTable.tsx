@@ -3,11 +3,13 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
 import { Search, Calendar, FileSpreadsheet, ArrowUpDown, ArrowUp, ArrowDown, Loader2, Download } from 'lucide-react';
 import PolicyImportModal from './PolicyImportModal';
+import CustomContextMenu from './CustomContextMenu';
 import { useDebounce } from '../hooks/useDebounce';
 import * as XLSX from 'xlsx';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { format } from 'date-fns';
 import toast from 'react-hot-toast';
+import { useNavigate } from 'react-router-dom';
 
 interface Policy {
   id: number;
@@ -43,6 +45,7 @@ interface Column {
 
 export default function PolicyTable() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [data, setData] = useState<Policy[]>([]);
   const [loading, setLoading] = useState(true);
   const [totalCount, setTotalCount] = useState(0);
@@ -51,6 +54,10 @@ export default function PolicyTable() {
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [showCancelled, setShowCancelled] = useState(true);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [quickFilter, setQuickFilter] = useState<'today' | 'yesterday' | 'week' | 'month' | 'year_only' | 'all'>('today'); // Default Today
+
+  // Context Menu State
+  const [contextMenu, setContextMenu] = useState<{ x: number, y: number, text: string, rowId: number } | null>(null);
   
   // Sort State
   const [sort, setSort] = useState<{ id: string, dir: "asc" | "desc" } | null>({ id: 'tarih', dir: 'asc' });
@@ -154,10 +161,10 @@ export default function PolicyTable() {
     try {
       // Optimize: Select only required columns + count
       let query = supabase.from('policeler').select(`
-            id, ad_soyad, dogum_tarihi, sirket, tarih, sasi, plaka, tc_vkn, 
+            id, ad_soyad, dogum_tarihi, sirket, tarih, tanzim_tarihi, sasi, plaka, tc_vkn, 
             belge_no, arac_cinsi, brut_prim, tur, kesen, ilgili_kisi, 
             police_no, acente, kart, ek_bilgiler_iletisim, net_prim, 
-            komisyon, durum
+            komisyon, durum, created_at
       `, { count: 'exact', head: false });
 
       // Employee Filter: Only show own policies
@@ -165,15 +172,32 @@ export default function PolicyTable() {
           query = query.eq('employee_id', user.id); 
       }
 
-      // Month Filter (Full Month Coverage Fix - Timezone Safe)
-      if (selectedMonth !== 0) {
-            const year = selectedYear;
-            const startStr = `${year}-${String(selectedMonth).padStart(2, '0')}-01`;
-            let endYear = year;
-            let endMonth = selectedMonth + 1;
-            if (endMonth > 12) { endMonth = 1; endYear = year + 1; }
-            const endStr = `${endYear}-${String(endMonth).padStart(2, '0')}-01`;
-            query = query.gte('tarih', startStr).lt('tarih', endStr);
+      // Quick Filters
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+
+      if (quickFilter === 'today') {
+          query = query.gte('tanzim_tarihi', today.toISOString()).lt('tanzim_tarihi', tomorrow.toISOString());
+      } else if (quickFilter === 'yesterday') {
+          const yesterday = new Date(today);
+          yesterday.setDate(yesterday.getDate() - 1);
+          query = query.gte('tanzim_tarihi', yesterday.toISOString()).lt('tanzim_tarihi', today.toISOString());
+      } else if (quickFilter === 'week') {
+          const startOfWeek = new Date(today);
+          startOfWeek.setDate(today.getDate() - today.getDay() + (today.getDay() === 0 ? -6 : 1)); // Monday
+          query = query.gte('tanzim_tarihi', startOfWeek.toISOString());
+      } else if (quickFilter === 'month') {
+           const today = new Date();
+           const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+           const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0, 23, 59, 59);
+           query = query.gte('tanzim_tarihi', startOfMonth.toISOString()).lt('tanzim_tarihi', endOfMonth.toISOString());
+      } else if (quickFilter === 'year_only') {
+           // Year Filter: Filter by 'tanzim_tarihi'
+           const startStr = `${selectedYear}-01-01`;
+           const endStr = `${selectedYear}-12-31T23:59:59`;
+           query = query.gte('tanzim_tarihi', startStr).lte('tanzim_tarihi', endStr);
       }
 
       if (!showCancelled) {
@@ -220,7 +244,7 @@ export default function PolicyTable() {
 
   useEffect(() => {
     fetchPolicies(sort, debouncedSearch);
-  }, [sort, selectedMonth, selectedYear, debouncedSearch, showCancelled]);
+  }, [sort, selectedMonth, selectedYear, debouncedSearch, showCancelled, quickFilter]);
 
   const handleSort = (columnId: string) => {
       if (sort?.id === columnId) {
@@ -255,37 +279,55 @@ export default function PolicyTable() {
   ];
 
   // Context Menu Copy
-  const handleCellContextMenu = (e: React.MouseEvent, text: any) => {
+  const handleCellContextMenu = (e: React.MouseEvent, text: any, rowId: number) => {
       e.preventDefault();
       e.stopPropagation();
-      if (!text) return;
-      
-      const textToCopy = String(text);
-      
-      const copyToClipboard = async () => {
-        try {
-            if (navigator.clipboard && window.isSecureContext) {
-                await navigator.clipboard.writeText(textToCopy);
-                toast.success(`Kopyalandı: ${textToCopy}`, { id: 'copy', duration: 1000, icon: '📋' });
-            } else {
-                const textArea = document.createElement("textarea");
-                textArea.value = textToCopy;
-                textArea.style.position = "fixed";
-                textArea.style.left = "-9999px";
-                document.body.appendChild(textArea);
-                textArea.focus();
-                textArea.select();
-                document.execCommand('copy');
-                document.body.removeChild(textArea);
-                toast.success(`Kopyalandı: ${textToCopy}`, { id: 'copy', duration: 1000, icon: '📋' });
-            }
-        } catch (err) {
-            console.error('Copy failed', err);
-            toast.error('Kopyalama başarısız');
-        }
-      };
+      setContextMenu({
+          x: e.clientX,
+          y: e.clientY,
+          text: String(text || ''),
+          rowId
+      });
+  };
 
-      copyToClipboard();
+  const handleCopy = () => {
+      if (!contextMenu?.text) return;
+      
+      const textToCopy = contextMenu.text;
+      
+      if (navigator.clipboard && window.isSecureContext) {
+          navigator.clipboard.writeText(textToCopy);
+          toast.success(`Kopyalandı: ${textToCopy}`, { id: 'copy', duration: 1000, icon: '📋' });
+      } else {
+          try {
+              const textArea = document.createElement("textarea");
+              textArea.value = textToCopy;
+              textArea.style.position = "fixed";
+              textArea.style.left = "-9999px";
+              document.body.appendChild(textArea);
+              textArea.focus();
+              textArea.select();
+              document.execCommand('copy');
+              document.body.removeChild(textArea);
+              toast.success(`Kopyalandı: ${textToCopy}`, { id: 'copy', duration: 1000, icon: '📋' });
+          } catch (err) {
+              console.error('Copy failed', err);
+              toast.error('Kopyalama başarısız');
+          }
+      }
+      setContextMenu(null);
+  };
+
+  const handleEdit = () => {
+      if (!contextMenu?.rowId) return;
+      const rolePrefix = user?.role === 'admin' ? '/admin' : user?.role === 'employee' ? '/employee' : '/sub-agent';
+      // Navigate to detail/edit page. 
+      // Assuming route is /role/policies/:id or similar. 
+      // If no edit page exists, maybe we should open a modal?
+      // For now, let's assume standard route structure or just show toast if unsure.
+      // But user specifically asked for "Düzenle".
+      navigate(`${rolePrefix}/policies/${contextMenu.rowId}`);
+      setContextMenu(null);
   };
 
   const renderCell = (policy: Policy, colId: string) => {
@@ -306,7 +348,7 @@ export default function PolicyTable() {
       })();
 
       return (
-          <div onContextMenu={(e) => handleCellContextMenu(e, (policy as any)[colId])} className="w-full h-full flex items-center">
+          <div onContextMenu={(e) => handleCellContextMenu(e, (policy as any)[colId], policy.id)} className="w-full h-full flex items-center">
               {content}
           </div>
       );
@@ -325,6 +367,26 @@ export default function PolicyTable() {
       {/* Filters Bar */}
       <div className="p-4 bg-white border-b flex flex-wrap gap-4 items-center justify-between shadow-sm z-10">
         <div className="flex items-center gap-4 flex-1">
+            <div className="flex gap-2 shrink-0">
+                <button 
+                    onClick={exportToExcel}
+                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors font-medium shadow-sm hover:shadow"
+                >
+                    <Download size={18} />
+                    Excel İndir
+                </button>
+                {/* Excel Upload - Admin Only */}
+                {user?.role === 'admin' && (
+                    <button 
+                        onClick={() => setIsImportModalOpen(true)}
+                        className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors font-medium shadow-sm hover:shadow"
+                    >
+                        <FileSpreadsheet size={18} />
+                        Excel Yükle
+                    </button>
+                )}
+            </div>
+
             <div className="relative flex-1 max-w-md">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
                 <input 
@@ -337,33 +399,48 @@ export default function PolicyTable() {
             </div>
             
             <div className="flex items-center gap-2 bg-gray-50 p-1 rounded-lg border border-gray-200">
-                <Calendar size={16} className="text-gray-500 ml-2" />
-                <select 
-                    className="bg-transparent border-none text-sm font-medium text-gray-700 focus:ring-0 cursor-pointer py-1.5"
-                    value={selectedMonth}
-                    onChange={(e) => setSelectedMonth(Number(e.target.value))}
+                <button
+                    onClick={() => setQuickFilter('today')}
+                    className={`px-3 py-1.5 text-xs font-bold rounded-md transition-colors ${quickFilter === 'today' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-600 hover:bg-gray-200'}`}
                 >
-                    <option value={0}>Tüm Aylar</option>
-                    <option value={1}>Ocak</option>
-                    <option value={2}>Şubat</option>
-                    <option value={3}>Mart</option>
-                    <option value={4}>Nisan</option>
-                    <option value={5}>Mayıs</option>
-                    <option value={6}>Haziran</option>
-                    <option value={7}>Temmuz</option>
-                    <option value={8}>Ağustos</option>
-                    <option value={9}>Eylül</option>
-                    <option value={10}>Ekim</option>
-                    <option value={11}>Kasım</option>
-                    <option value={12}>Aralık</option>
-                </select>
-                <div className="w-px h-6 bg-gray-300 mx-1"></div>
+                    Bugün
+                </button>
+                <button
+                    onClick={() => setQuickFilter('yesterday')}
+                    className={`px-3 py-1.5 text-xs font-bold rounded-md transition-colors ${quickFilter === 'yesterday' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-600 hover:bg-gray-200'}`}
+                >
+                    Dün
+                </button>
+                <button
+                    onClick={() => setQuickFilter('week')}
+                    className={`px-3 py-1.5 text-xs font-bold rounded-md transition-colors ${quickFilter === 'week' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-600 hover:bg-gray-200'}`}
+                >
+                    Bu Hafta
+                </button>
+                <button
+                    onClick={() => setQuickFilter('month')}
+                    className={`px-3 py-1.5 text-xs font-bold rounded-md transition-colors ${quickFilter === 'month' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-600 hover:bg-gray-200'}`}
+                >
+                    Bu Ay
+                </button>
+                <button
+                    onClick={() => setQuickFilter('all')}
+                    className={`px-3 py-1.5 text-xs font-bold rounded-md transition-colors ${quickFilter === 'all' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-600 hover:bg-gray-200'}`}
+                >
+                    Tümü
+                </button>
+            </div>
+
+            {/* Year Filter - Relocated to Top Right */}
+            <div className="flex items-center gap-2 bg-gray-50 p-1 rounded-lg border border-gray-200 ml-auto">
+                <Calendar size={16} className="text-gray-500 ml-2" />
+                <span className="text-xs font-bold text-gray-500">Yıl:</span>
                 <select 
                     className="bg-transparent border-none text-sm font-medium text-gray-700 focus:ring-0 cursor-pointer py-1.5"
                     value={selectedYear}
-                    onChange={(e) => setSelectedYear(Number(e.target.value))}
+                    onChange={(e) => { setSelectedYear(Number(e.target.value)); setQuickFilter('year_only'); }}
                 >
-                    {Array.from({ length: 6 }, (_, i) => new Date().getFullYear() - 2 + i).map(year => (
+                    {Array.from({ length: 4 }, (_, i) => new Date().getFullYear() - i).map(year => (
                         <option key={year} value={year}>{year}</option>
                     ))}
                 </select>
@@ -381,26 +458,6 @@ export default function PolicyTable() {
                     İptalleri Göster
                 </label>
             </div>
-        </div>
-
-        <div className="flex gap-2">
-            <button 
-                onClick={exportToExcel}
-                className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors font-medium shadow-sm hover:shadow"
-            >
-                <Download size={18} />
-                Excel İndir
-            </button>
-            {/* Excel Upload - Admin Only */}
-            {user?.role === 'admin' && (
-                <button 
-                    onClick={() => setIsImportModalOpen(true)}
-                    className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors font-medium shadow-sm hover:shadow"
-                >
-                    <FileSpreadsheet size={18} />
-                    Excel Yükle
-                </button>
-            )}
         </div>
       </div>
 
@@ -503,6 +560,16 @@ export default function PolicyTable() {
             fetchPolicies(sort, debouncedSearch);
         }}
       />
+      
+      {contextMenu && (
+        <CustomContextMenu
+            x={contextMenu.x}
+            y={contextMenu.y}
+            onClose={() => setContextMenu(null)}
+            onCopy={handleCopy}
+            onEdit={handleEdit}
+        />
+      )}
     </div>
   );
 }

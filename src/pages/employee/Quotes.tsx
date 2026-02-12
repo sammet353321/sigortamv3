@@ -7,6 +7,7 @@ import { Search, Filter, Eye, ArrowRight, Download, Calendar, Loader2, ArrowUp, 
 import StatusBadge from '@/components/StatusBadge';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
+import CustomContextMenu from '@/components/CustomContextMenu';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useDebounce } from '@/hooks/useDebounce';
 import * as XLSX from 'xlsx';
@@ -30,7 +31,11 @@ export default function EmployeeQuotesPage() {
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filterType, setFilterType] = useState<string>('all');
   const [uniqueTypes, setUniqueTypes] = useState<string[]>([]);
-  
+  const [quickFilter, setQuickFilter] = useState<'today' | 'yesterday' | 'week' | 'month' | 'all'>('today'); // Default Today
+
+  // Context Menu State
+  const [contextMenu, setContextMenu] = useState<{ x: number, y: number, text: string, rowId: number } | null>(null);
+
   // Sort State
   const [sort, setSort] = useState<{ id: string, dir: "asc" | "desc" } | null>({ id: 'tarih', dir: 'desc' });
 
@@ -51,15 +56,33 @@ export default function EmployeeQuotesPage() {
           query = query.eq('employee_id', user.id); // Or kesen_id depending on schema
       }
 
-      // Month Filter
-      if (selectedMonth !== 0) {
-        const year = new Date().getFullYear();
-        const startStr = `${year}-${String(selectedMonth).padStart(2, '0')}-01`;
-        let endYear = year;
-        let endMonth = selectedMonth + 1;
-        if (endMonth > 12) { endMonth = 1; endYear = year + 1; }
-        const endStr = `${endYear}-${String(endMonth).padStart(2, '0')}-01`;
-        query = query.gte('tarih', startStr).lt('tarih', endStr);
+      // Quick Filters
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+
+      if (quickFilter === 'today') {
+          query = query.gte('created_at', today.toISOString()).lt('created_at', tomorrow.toISOString());
+      } else if (quickFilter === 'yesterday') {
+          const yesterday = new Date(today);
+          yesterday.setDate(yesterday.getDate() - 1);
+          query = query.gte('created_at', yesterday.toISOString()).lt('created_at', today.toISOString());
+      } else if (quickFilter === 'week') {
+          const startOfWeek = new Date(today);
+          startOfWeek.setDate(today.getDate() - today.getDay() + (today.getDay() === 0 ? -6 : 1)); // Monday
+          query = query.gte('created_at', startOfWeek.toISOString());
+      } else if (quickFilter === 'month') {
+          // Month Filter
+          if (selectedMonth !== 0) {
+            const year = new Date().getFullYear();
+            const startStr = `${year}-${String(selectedMonth).padStart(2, '0')}-01`;
+            let endYear = year;
+            let endMonth = selectedMonth + 1;
+            if (endMonth > 12) { endMonth = 1; endYear = year + 1; }
+            const endStr = `${endYear}-${String(endMonth).padStart(2, '0')}-01`;
+            query = query.gte('tarih', startStr).lt('tarih', endStr);
+          }
       }
 
       // Search
@@ -116,42 +139,53 @@ export default function EmployeeQuotesPage() {
   };
 
   // Context Menu Copy
-  const handleCellContextMenu = (e: React.MouseEvent, text: any) => {
+  const handleCellContextMenu = (e: React.MouseEvent, text: any, rowId: number) => {
       e.preventDefault();
       e.stopPropagation(); // Prevent row click
-      if (!text) return;
-      
-      const textToCopy = String(text);
-      
-      const copyToClipboard = async () => {
-        try {
-            if (navigator.clipboard && window.isSecureContext) {
-                await navigator.clipboard.writeText(textToCopy);
-                toast.success(`Kopyalandı: ${textToCopy}`, { id: 'copy', duration: 1000, icon: '📋' });
-            } else {
-                const textArea = document.createElement("textarea");
-                textArea.value = textToCopy;
-                textArea.style.position = "fixed";
-                textArea.style.left = "-9999px";
-                document.body.appendChild(textArea);
-                textArea.focus();
-                textArea.select();
-                document.execCommand('copy');
-                document.body.removeChild(textArea);
-                toast.success(`Kopyalandı: ${textToCopy}`, { id: 'copy', duration: 1000, icon: '📋' });
-            }
-        } catch (err) {
-            console.error('Copy failed', err);
-            toast.error('Kopyalama başarısız');
-        }
-      };
+      setContextMenu({
+          x: e.clientX,
+          y: e.clientY,
+          text: String(text || ''),
+          rowId
+      });
+  };
 
-      copyToClipboard();
+  const handleCopy = () => {
+      if (!contextMenu?.text) return;
+      const textToCopy = contextMenu.text;
+      
+      if (navigator.clipboard && window.isSecureContext) {
+          navigator.clipboard.writeText(textToCopy);
+          toast.success(`Kopyalandı: ${textToCopy}`, { id: 'copy', duration: 1000, icon: '📋' });
+      } else {
+          try {
+              const textArea = document.createElement("textarea");
+              textArea.value = textToCopy;
+              textArea.style.position = "fixed";
+              textArea.style.left = "-9999px";
+              document.body.appendChild(textArea);
+              textArea.focus();
+              textArea.select();
+              document.execCommand('copy');
+              document.body.removeChild(textArea);
+              toast.success(`Kopyalandı: ${textToCopy}`, { id: 'copy', duration: 1000, icon: '📋' });
+          } catch (err) {
+              console.error('Copy failed', err);
+              toast.error('Kopyalama başarısız');
+          }
+      }
+      setContextMenu(null);
+  };
+
+  const handleEdit = () => {
+      if (!contextMenu?.rowId) return;
+      navigate(`/employee/quotes/${contextMenu.rowId}`);
+      setContextMenu(null);
   };
 
   useEffect(() => {
     fetchQuotes();
-  }, [user?.id, selectedMonth, debouncedSearch, filterStatus, filterType, sort]);
+  }, [user?.id, selectedMonth, debouncedSearch, filterStatus, filterType, sort, quickFilter]);
 
   const handleSort = (columnId: string) => {
       if (sort?.id === columnId) {
@@ -259,6 +293,9 @@ export default function EmployeeQuotesPage() {
       {/* Header & Filters */}
       <div className="p-4 bg-white border-b flex flex-wrap gap-4 items-center justify-between shadow-sm z-10">
         <div className="flex items-center gap-4 flex-1">
+            <button onClick={downloadExcel} className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors font-medium shadow-sm hover:shadow shrink-0">
+                <Download size={18} /> Excel İndir
+            </button>
             <div className="relative flex-1 max-w-md">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
                 <input 
@@ -271,11 +308,38 @@ export default function EmployeeQuotesPage() {
             </div>
 
             <div className="flex items-center gap-2 bg-gray-50 p-1 rounded-lg border border-gray-200">
+                <button
+                    onClick={() => setQuickFilter('today')}
+                    className={`px-3 py-1.5 text-xs font-bold rounded-md transition-colors ${quickFilter === 'today' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-600 hover:bg-gray-200'}`}
+                >
+                    Bugün
+                </button>
+                <button
+                    onClick={() => setQuickFilter('yesterday')}
+                    className={`px-3 py-1.5 text-xs font-bold rounded-md transition-colors ${quickFilter === 'yesterday' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-600 hover:bg-gray-200'}`}
+                >
+                    Dün
+                </button>
+                <button
+                    onClick={() => setQuickFilter('week')}
+                    className={`px-3 py-1.5 text-xs font-bold rounded-md transition-colors ${quickFilter === 'week' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-600 hover:bg-gray-200'}`}
+                >
+                    Bu Hafta
+                </button>
+                <button
+                    onClick={() => setQuickFilter('all')}
+                    className={`px-3 py-1.5 text-xs font-bold rounded-md transition-colors ${quickFilter === 'all' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-600 hover:bg-gray-200'}`}
+                >
+                    Tümü
+                </button>
+            </div>
+
+            <div className="flex items-center gap-2 bg-gray-50 p-1 rounded-lg border border-gray-200">
                 <Calendar size={16} className="text-gray-500 ml-2" />
                 <select 
                     className="bg-transparent border-none text-sm font-medium text-gray-700 focus:ring-0 cursor-pointer py-1.5 outline-none" 
                     value={selectedMonth} 
-                    onChange={(e) => setSelectedMonth(Number(e.target.value))}
+                    onChange={(e) => { setSelectedMonth(Number(e.target.value)); setQuickFilter('month'); }}
                 >
                     <option value={0}>Tüm Aylar</option>
                     {[...Array(12)].map((_, i) => <option key={i} value={i+1}>{new Date(0, i).toLocaleString('tr-TR', {month: 'long'})}</option>)}
@@ -304,10 +368,6 @@ export default function EmployeeQuotesPage() {
                 </select>
             </div>
         </div>
-
-        <button onClick={downloadExcel} className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors font-medium shadow-sm hover:shadow">
-            <Download size={18} /> Excel İndir
-        </button>
       </div>
 
       {/* Virtualized Table Container */}
@@ -390,6 +450,16 @@ export default function EmployeeQuotesPage() {
           <span>Toplam {totalCount} kayıt</span>
           <span>{loading ? 'Yükleniyor...' : 'Hazır'}</span>
       </div>
+      
+      {contextMenu && (
+        <CustomContextMenu
+            x={contextMenu.x}
+            y={contextMenu.y}
+            onClose={() => setContextMenu(null)}
+            onCopy={handleCopy}
+            onEdit={handleEdit}
+        />
+      )}
     </div>
   );
 }

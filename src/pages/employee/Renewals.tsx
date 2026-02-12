@@ -7,6 +7,7 @@ import { Search, Filter, ArrowRight, Clock, Download, Eye, ArrowUp, ArrowDown, A
 import { useNavigate } from 'react-router-dom';
 import StatusBadge from '@/components/StatusBadge';
 import toast from 'react-hot-toast';
+import CustomContextMenu from '@/components/CustomContextMenu';
 import * as XLSX from 'xlsx';
 
 interface Policy {
@@ -50,6 +51,9 @@ export default function RenewalsPage() {
   const [filterType, setFilterType] = useState<string>('all');
   const [uniqueTypes, setUniqueTypes] = useState<string[]>([]);
   
+  // Context Menu State
+  const [contextMenu, setContextMenu] = useState<{ x: number, y: number, text: string, rowId: number } | null>(null);
+
   // Sort State
   const [sort, setSort] = useState<{ id: string, dir: "asc" | "desc" } | null>({ id: 'tarih', dir: 'asc' });
 
@@ -57,35 +61,48 @@ export default function RenewalsPage() {
     fetchRenewals();
   }, [user]);
 
-  const handleCellContextMenu = (e: React.MouseEvent, text: string | number | null | undefined) => {
+  const handleCellContextMenu = (e: React.MouseEvent, text: string | number | null | undefined, rowId: number) => {
       e.preventDefault();
-      if (!text) return;
-      const textToCopy = String(text);
-      
-      const copyToClipboard = async () => {
-        try {
-            if (navigator.clipboard && window.isSecureContext) {
-                await navigator.clipboard.writeText(textToCopy);
-                toast.success(`Kopyalandı: ${textToCopy}`, { id: 'copy', duration: 1000, icon: '📋' });
-            } else {
-                const textArea = document.createElement("textarea");
-                textArea.value = textToCopy;
-                textArea.style.position = "fixed";
-                textArea.style.left = "-9999px";
-                document.body.appendChild(textArea);
-                textArea.focus();
-                textArea.select();
-                document.execCommand('copy');
-                document.body.removeChild(textArea);
-                toast.success(`Kopyalandı: ${textToCopy}`, { id: 'copy', duration: 1000, icon: '📋' });
-            }
-        } catch (err) {
-            console.error('Copy failed', err);
-            toast.error('Kopyalama başarısız');
-        }
-      };
+      e.stopPropagation(); // Prevent row click
+      setContextMenu({
+          x: e.clientX,
+          y: e.clientY,
+          text: String(text || ''),
+          rowId
+      });
+  };
 
-      copyToClipboard();
+  const handleCopy = () => {
+      if (!contextMenu?.text) return;
+      const textToCopy = contextMenu.text;
+      
+      if (navigator.clipboard && window.isSecureContext) {
+          navigator.clipboard.writeText(textToCopy);
+          toast.success(`Kopyalandı: ${textToCopy}`, { id: 'copy', duration: 1000, icon: '📋' });
+      } else {
+          try {
+              const textArea = document.createElement("textarea");
+              textArea.value = textToCopy;
+              textArea.style.position = "fixed";
+              textArea.style.left = "-9999px";
+              document.body.appendChild(textArea);
+              textArea.focus();
+              textArea.select();
+              document.execCommand('copy');
+              document.body.removeChild(textArea);
+              toast.success(`Kopyalandı: ${textToCopy}`, { id: 'copy', duration: 1000, icon: '📋' });
+          } catch (err) {
+              console.error('Copy failed', err);
+              toast.error('Kopyalama başarısız');
+          }
+      }
+      setContextMenu(null);
+  };
+
+  const handleEdit = () => {
+      if (!contextMenu?.rowId) return;
+      navigate(`/employee/policies/${contextMenu.rowId}`);
+      setContextMenu(null);
   };
 
   const fetchRenewals = async () => {
@@ -96,11 +113,15 @@ export default function RenewalsPage() {
       const today = new Date();
       const next14Days = addDays(today, 14);
       
+      // Use Local Date Strings
+      const todayStr = format(today, 'yyyy-MM-dd');
+      const next14DaysStr = format(next14Days, 'yyyy-MM-dd');
+      
       const { data, error } = await supabase
         .from('policeler')
         .select('*')
-        .gte('tarih', today.toISOString().split('T')[0])
-        .lte('tarih', next14Days.toISOString().split('T')[0])
+        .gte('tarih', todayStr)
+        .lte('tarih', next14DaysStr)
         .order('tarih', { ascending: true });
 
       if (error) throw error;
@@ -334,7 +355,7 @@ export default function RenewalsPage() {
                         <td 
                             key={`${policy.id}-${col.id}`}
                             className="px-4 py-3"
-                            onContextMenu={(e) => handleCellContextMenu(e, (policy as any)[col.id])}
+                            onContextMenu={(e) => handleCellContextMenu(e, (policy as any)[col.id], policy.id)}
                         >
                             {renderCell(policy, col.id as string)}
                         </td>
@@ -351,6 +372,16 @@ export default function RenewalsPage() {
           </table>
         </div>
       </div>
+      
+      {contextMenu && (
+        <CustomContextMenu
+            x={contextMenu.x}
+            y={contextMenu.y}
+            onClose={() => setContextMenu(null)}
+            onCopy={handleCopy}
+            onEdit={handleEdit}
+        />
+      )}
     </div>
   );
 }

@@ -52,6 +52,9 @@ async function startSock(userId, socketIO) {
         browser: ["Sigorta CRM", "Chrome", "1.0.0"],
         markOnlineOnConnect: true,
         generateHighQualityLinkPreview: true,
+        keepAliveIntervalMs: 30_000, // Keep connection alive every 30s
+        connectTimeoutMs: 60_000,    // Wait up to 60s for connection
+        retryRequestDelayMs: 2000,   // Retry requests after 2s
         getMessage: async (key) => {
             return { conversation: 'hello' };
         }
@@ -102,10 +105,15 @@ async function startSock(userId, socketIO) {
             const normalizedSenderJid = jidNormalizedUser(participant);
             const senderPhone = getPhoneFromJid(normalizedSenderJid);
             
-            // Self-message detection
+            // Self-message detection (Enhanced)
             const myJid = jidNormalizedUser(sock.user?.id);
             const myPhone = getPhoneFromJid(myJid);
-            const isFromMe = msg.key.fromMe || (myPhone && senderPhone && senderPhone.slice(-10) === myPhone.slice(-10));
+            
+            // Normalize for comparison (remove country code prefix if needed, or keep last 10 digits)
+            const cleanSender = senderPhone ? senderPhone.slice(-10) : '';
+            const cleanMyPhone = myPhone ? myPhone.slice(-10) : '';
+
+            const isFromMe = msg.key.fromMe || (cleanSender && cleanMyPhone && cleanSender === cleanMyPhone);
 
             let senderName = senderPhone;
             if (!isFromMe) {
@@ -186,14 +194,21 @@ async function startSock(userId, socketIO) {
             } else if (msgType === 'videoMessage') {
                 type = 'video';
                 content = msg.message.videoMessage.caption || 'Video';
-            } else if (msgType === 'documentMessage') {
+            } else if (msgType === 'documentMessage' || msgType === 'documentWithCaptionMessage') {
                 type = 'document';
-                content = msg.message.documentMessage.fileName || 'Dosya';
+                
+                // Handle both simple document and document with caption
+                const docMsg = msg.message[msgType].message ? msg.message[msgType].message.documentMessage : msg.message[msgType];
+                
+                content = docMsg.fileName || msg.message[msgType].caption || 'Dosya';
+                
                 try {
                     const buffer = await downloadMediaWithRetry(msg);
-                    const fileName = msg.message.documentMessage.fileName || `${msg.key.id}.pdf`;
-                    const uniquePath = `received-documents/${msg.key.id}_${fileName}`;
-                    const mimeType = msg.message.documentMessage.mimetype || 'application/pdf';
+                    const fileName = docMsg.fileName || `${msg.key.id}.pdf`;
+                    // Ensure unique path but keep extension
+                    const ext = fileName.split('.').pop();
+                    const uniquePath = `received-documents/${msg.key.id}_${Date.now()}.${ext}`;
+                    const mimeType = docMsg.mimetype || 'application/pdf';
 
                     const { error: uploadError } = await db.client.storage
                         .from('chat-media')
@@ -202,6 +217,8 @@ async function startSock(userId, socketIO) {
                     if (!uploadError) {
                         const { data: { publicUrl } } = db.client.storage.from('chat-media').getPublicUrl(uniquePath);
                         mediaUrl = publicUrl;
+                    } else {
+                        console.error('[Media] Upload failed:', uploadError.message);
                     }
                 } catch (e) { console.error('[Media] Document download failed', e.message); }
             } else if (msgType === 'audioMessage') {
@@ -228,6 +245,13 @@ async function startSock(userId, socketIO) {
             }
 
             // 5. Save to DB
+            // Ensure timestamp is a number (handle Long or Number)
+            let timestamp = msg.messageTimestamp;
+            if (typeof timestamp === 'object' && timestamp !== null) {
+                timestamp = timestamp.toNumber ? timestamp.toNumber() : (timestamp.low || Date.now()/1000);
+            }
+            if (!timestamp) timestamp = Date.now() / 1000;
+
             const messageData = {
                 whatsapp_message_id: msg.key.id,
                 user_id: userId,
@@ -239,8 +263,8 @@ async function startSock(userId, socketIO) {
                 content: content,
                 media_url: mediaUrl,
                 quoted_message_id: quotedMessageId,
-                status: 'received',
-                created_at: new Date(msg.messageTimestamp * 1000).toISOString() // Use actual message time!
+                status: isFromMe ? 'sent' : 'received',
+                created_at: new Date(timestamp * 1000).toISOString() // Use actual message time!
             };
 
             const { error } = await db.saveMessage(messageData);
@@ -266,9 +290,29 @@ async function startSock(userId, socketIO) {
 
         if (connection === 'close') {
             const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.log(`Connection closed for ${userId}. Reconnecting: ${shouldReconnect}`);
+            const error = lastDisconnect.error;
+            const isBadMac = error?.message?.includes('Bad MAC') || error?.toString().includes('Bad MAC');
+
+            console.log(`Connection closed for ${userId}. Reconnecting: ${shouldReconnect}. Error: ${error?.message}`);
+            
             await db.updateSession(userId, { status: 'disconnected', qr_code: null });
             
+            // CRITICAL FIX: Remove the closed session from memory so startSock creates a NEW one
+            sessions.delete(userId);
+            
+            if (isBadMac) {
+                console.error(`[CRITICAL] Bad MAC error detected for ${userId}. Corrupted session. Deleting data...`);
+                sessionRetries.delete(userId);
+                try { 
+                    fs.rmSync(`auth_info_multi/${userId}`, { recursive: true, force: true }); 
+                    console.log(`[CRITICAL] Deleted corrupted session data for ${userId}`);
+                } catch(e) {
+                    console.error(`[CRITICAL] Failed to delete session data: ${e.message}`);
+                }
+                // Do NOT reconnect automatically. Let the user re-scan.
+                return;
+            }
+
             if (shouldReconnect) {
                 const retries = sessionRetries.get(userId) || 0;
                 if (retries < MAX_RETRIES) {
@@ -277,12 +321,10 @@ async function startSock(userId, socketIO) {
                     setTimeout(() => startSock(userId, socketIO), RETRY_DELAY);
                 } else {
                     console.log(`Max retries reached for ${userId}. Stopping.`);
-                    sessions.delete(userId);
                     sessionRetries.delete(userId);
                 }
             } else {
                 console.log(`Session logged out for ${userId}. Deleting session.`);
-                sessions.delete(userId);
                 try { fs.rmSync(`auth_info_multi/${userId}`, { recursive: true, force: true }); } catch(e) {}
             }
         } else if (connection === 'open') {
@@ -358,5 +400,16 @@ module.exports = {
     },
     getAllSessions: () => Array.from(sessions.keys()),
     syncGroups: syncGroupsAndMembers,
+    deleteSessionData: async (userId) => {
+        try {
+            const path = `auth_info_multi/${userId}`;
+            if (fs.existsSync(path)) {
+                fs.rmSync(path, { recursive: true, force: true });
+                console.log(`[Session] Deleted session data for ${userId}`);
+            }
+        } catch (err) {
+            console.error(`[Session] Error deleting data for ${userId}:`, err);
+        }
+    },
     getStore: () => store
 };

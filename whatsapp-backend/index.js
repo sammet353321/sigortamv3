@@ -5,10 +5,18 @@ const config = require('./src/config');
 const db = require('./src/db');
 const socket = require('./src/socket');
 const bot = require('./src/bot');
+const multer = require('multer');
+const ai = require('./src/ai');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// Init AI
+ai.initAI(config.geminiApiKey);
+
+// Multer for file uploads (memory storage)
+const upload = multer({ storage: multer.memoryStorage() });
 
 const server = http.createServer(app);
 const io = socket.init(server);
@@ -82,6 +90,131 @@ app.post('/groups/sync', async (req, res) => {
     } catch (err) {
         console.error('[API] Sync failed:', err);
         res.status(500).send({ error: err.message });
+    }
+});
+
+// --- DASHBOARD PROXY ENDPOINT (Optimized) ---
+app.post('/dashboard/stats', async (req, res) => {
+    const { employeeId, startDate, endDate, year } = req.body;
+    
+    if (!employeeId || !startDate || !endDate) {
+        return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    try {
+        const client = db.client;
+        
+        // 1. KPI & Totals (From Optimized Table)
+        // We sum up the daily stats for the selected range.
+        const { data: statsData, error: statsError } = await client
+            .from('daily_employee_stats')
+            .select('quote_count, policy_count, total_premium, total_commission')
+            .eq('employee_id', employeeId)
+            .gte('date', startDate)
+            .lte('date', endDate);
+            
+        if (statsError) throw statsError;
+        
+        // Calculate Totals in Backend
+        let totalQuotes = 0;
+        let totalPolicies = 0;
+        let totalPremium = 0;
+        let totalCommission = 0;
+        
+        if (statsData) {
+            statsData.forEach(row => {
+                totalQuotes += row.quote_count || 0;
+                totalPolicies += row.policy_count || 0;
+                totalPremium += row.total_premium || 0;
+                totalCommission += row.total_commission || 0;
+            });
+        }
+
+        // 2. Yearly Data (From Optimized Table) - 365 rows max
+        let yearStats = [];
+        if (year) {
+            const yearStart = `${year}-01-01`;
+            const yearEnd = `${year}-12-31`;
+            
+            const { data: ys, error: ysError } = await client
+                .from('daily_employee_stats')
+                .select('date, quote_count, policy_count')
+                .eq('employee_id', employeeId)
+                .gte('date', yearStart)
+                .lte('date', yearEnd);
+                
+            if (ysError) throw ysError;
+            yearStats = ys || [];
+        }
+
+        // 3. Breakdowns (From Raw Tables - Only for selected range)
+        // Since we don't have JSON columns, we must query raw data for breakdowns.
+        // This is acceptable as the range is usually small (days/weeks).
+        
+        // Quotes Breakdown
+        const { data: quoteBreakdownRaw, error: qbError } = await client
+            .from('teklifler')
+            .select('tur')
+            .eq('employee_id', employeeId)
+            .gte('tanzim_tarihi', startDate)
+            .lte('tanzim_tarihi', endDate);
+            
+        if (qbError) throw qbError;
+
+        // Policies Breakdown
+        const { data: policyBreakdownRaw, error: pbError } = await client
+            .from('policeler')
+            .select('tur, sirket')
+            .eq('employee_id', employeeId)
+            .gte('tanzim_tarihi', startDate)
+            .lte('tanzim_tarihi', endDate);
+            
+        if (pbError) throw pbError;
+
+        // 4. Upcoming Renewals
+        const today = new Date().toISOString();
+        const next30 = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+        
+        const { data: renewals } = await client
+            .from('policeler')
+            .select('id, musteri_adi, plaka, bitis_tarihi, tur')
+            .eq('employee_id', employeeId)
+            .gte('bitis_tarihi', today)
+            .lte('bitis_tarihi', next30)
+            .order('bitis_tarihi', { ascending: true })
+            .limit(5);
+
+        res.json({ 
+            kpi: {
+                totalQuotes,
+                totalPolicies,
+                totalPremium,
+                totalCommission
+            },
+            yearStats,
+            quoteBreakdownRaw,
+            policyBreakdownRaw,
+            renewals: renewals || [] 
+        });
+    } catch (err) {
+        console.error('[Dashboard API] Error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// --- AI CHAT ENDPOINT ---
+app.post('/chat/analyze', upload.single('file'), async (req, res) => {
+    try {
+        const { message } = req.body;
+        const file = req.file;
+        
+        console.log(`[AI] Analyzing request. Message: ${message?.substring(0, 50)}..., File: ${file ? file.originalname : 'None'}`);
+
+        const result = await ai.analyzeQuote(message, file ? file.buffer : null);
+        res.json(result);
+    } catch (err) {
+        console.error('[AI] Error:', err);
+        res.status(500).json({ error: err.message });
     }
 });
 

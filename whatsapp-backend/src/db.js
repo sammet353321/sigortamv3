@@ -31,14 +31,12 @@ module.exports = {
     async saveMessage(msg) {
         try {
             // Use UPSERT with onConflict: 'whatsapp_message_id'
-            // This is the CRITICAL fix for duplicates across multiple sessions.
-            // If the same message (same WA ID) is saved twice, it will just update the existing row.
+            // We allow updates to ensure timestamps and content are correct if re-synced
             
             const { error, data } = await supabase
                 .from('messages')
                 .upsert(msg, { 
-                    onConflict: 'whatsapp_message_id',
-                    ignoreDuplicates: true // If it exists, just ignore it
+                    onConflict: 'whatsapp_message_id'
                 })
                 .select();
 

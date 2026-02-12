@@ -55,6 +55,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       }
     }).catch((err) => {
+      // Ignore AbortError as it's likely due to component unmounting or race conditions
+      if (err.name === 'AbortError' || err.message?.includes('AbortError') || err.message?.includes('signal is aborted')) {
+        console.warn('Session check aborted, keeping previous state.');
+        // Do NOT clear user on abort, might be a race condition during login
+        setLoading(false);
+        return;
+      }
       console.error('Unexpected error during session check:', err);
       setLoading(false);
       setUser(null);
@@ -95,31 +102,40 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => subscription.unsubscribe();
   }, []);
 
-  async function fetchProfile(userId: string) {
+  async function fetchProfile(userId: string, retryCount = 0) {
     try {
       const { data, error } = await supabase
         .from('users')
         .select('*')
         .eq('id', userId)
-        .maybeSingle(); // Use maybeSingle to avoid PGRST116 if no row found
+        .maybeSingle(); 
       
       if (error) throw error;
       
       if (data) {
         setUser(data);
-        // CACHE UPDATE
         localStorage.setItem('app_user_cache', JSON.stringify(data));
+        setLoading(false); // Success! Stop loading immediately
       } else {
-        // Profil yoksa oturumu kapat ama ağ hatasına karşı dikkatli ol
         console.warn('User profile not found in public table. Logging out.');
         await signOut(); 
       }
-    } catch (error) {
+    } catch (error: any) {
       console.warn('Error fetching profile:', error);
+      
+      // Retry on AbortError or Network Error
+      if (retryCount < 3 && (error?.name === 'AbortError' || error?.message?.includes('AbortError') || error?.message?.includes('signal is aborted') || error?.message?.includes('fetch failed'))) {
+          console.log(`Retrying profile fetch... (${retryCount + 1}/3)`);
+          setTimeout(() => fetchProfile(userId, retryCount + 1), 1000);
+          return; // Don't set loading false yet
+      }
+      
       // Profil çekilemezse oturumu kapatma, belki geçici bir ağ sorunudur
       // Sadece loading'i kapat
     } finally {
-      setLoading(false);
+      if (retryCount >= 3 || !loading) {
+         setLoading(false);
+      }
     }
   }
 

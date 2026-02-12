@@ -94,10 +94,15 @@ export default function ChatArea({ groupId, targetPhone, targetName }: ChatAreaP
         }
     };
 
-    // Auto Scroll
-    useLayoutEffect(() => {
+    // Auto Scroll - Always scroll to bottom when messages change
+    useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
     }, [messages]);
+
+    // Scroll to bottom when group changes
+    useEffect(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+    }, [groupId]);
 
     const handleSendMessage = async (e?: React.FormEvent) => {
         e?.preventDefault();

@@ -2,11 +2,14 @@ import React, { useEffect, useState, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import { Teklif } from '@/types';
 import StatusBadge from '@/components/StatusBadge';
-import { format } from 'date-fns';
+import { format, startOfDay, endOfDay, subDays, startOfWeek, endOfWeek, startOfMonth, endOfMonth, startOfYear, endOfYear } from 'date-fns';
 import { tr } from 'date-fns/locale';
-import { Search, Download, ArrowUp, ArrowDown, ArrowUpDown, Loader2, Calendar } from 'lucide-react';
+import { Search, Download, ArrowUp, ArrowDown, ArrowUpDown, Loader2, Calendar, Copy, Edit } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useDebounce } from '@/hooks/useDebounce';
+import toast from 'react-hot-toast';
+import CustomContextMenu from '@/components/CustomContextMenu';
+import { useNavigate } from 'react-router-dom';
 
 interface Column {
   id: keyof Teklif | string;
@@ -21,10 +24,20 @@ export default function AdminQuotesPage() {
     const [loadingMore, setLoadingMore] = useState(false);
     const [totalCount, setTotalCount] = useState(0);
     const [searchTerm, setSearchTerm] = useState('');
-    const [selectedMonth, setSelectedMonth] = useState<number>(new Date().getMonth() + 1);
+    const [dateFilter, setDateFilter] = useState('today'); // Default Today
     
     // Sort State - Default Ascending
     const [sort, setSort] = useState<{ id: string, dir: "asc" | "desc" } | null>({ id: 'tarih', dir: 'asc' });
+
+    // Context Menu State
+    const [contextMenu, setContextMenu] = useState<{ x: number, y: number, row: Teklif, field: string, value: any } | null>(null);
+
+    // Close context menu on click
+    useEffect(() => {
+        const handleClick = () => setContextMenu(null);
+        window.addEventListener('click', handleClick);
+        return () => window.removeEventListener('click', handleClick);
+    }, []);
 
     // Debounce search
     const debouncedSearch = useDebounce(searchTerm, 500);
@@ -80,14 +93,41 @@ export default function AdminQuotesPage() {
         try {
             let query = supabase.from('teklifler').select('*', { count: 'exact', head: false });
 
-            // Month Filter
-            if (selectedMonth !== 0) {
-                 const year = new Date().getFullYear();
-                 const start = new Date(year, selectedMonth - 1, 1);
-                 const end = new Date(year, selectedMonth, 1);
-                 const startStr = format(start, 'yyyy-MM-dd');
-                 const endStr = format(end, 'yyyy-MM-dd');
-                 query = query.gte('tarih', startStr).lt('tarih', endStr);
+            // Date Filter Logic
+            const now = new Date();
+            let start, end;
+
+            switch (dateFilter) {
+                case 'today':
+                    start = startOfDay(now);
+                    end = endOfDay(now);
+                    break;
+                case 'yesterday':
+                    start = startOfDay(subDays(now, 1));
+                    end = endOfDay(subDays(now, 1));
+                    break;
+                case 'this_week':
+                    start = startOfWeek(now, { weekStartsOn: 1 }); // Monday start
+                    end = endOfWeek(now, { weekStartsOn: 1 });
+                    break;
+                case 'this_month':
+                    start = startOfMonth(now);
+                    end = endOfMonth(now);
+                    break;
+                case 'all':
+                    // No filter
+                    break;
+                default:
+                    start = startOfDay(now);
+                    end = endOfDay(now);
+            }
+
+            if (start && end && dateFilter !== 'all') {
+                 // Adjust for timezone if needed, but startOfDay returns local time. 
+                 // toISOString converts to UTC.
+                 // If local is UTC+3, startOfDay(00:00) -> UTC 21:00 prev day.
+                 // This covers the full local day in DB if DB stores exact ISO strings.
+                 query = query.gte('tarih', start.toISOString()).lte('tarih', end.toISOString());
             }
 
             // Text Search
@@ -130,7 +170,7 @@ export default function AdminQuotesPage() {
 
     useEffect(() => {
         fetchQuotes(0, sort, debouncedSearch);
-    }, [selectedMonth, debouncedSearch, sort]);
+    }, [dateFilter, debouncedSearch, sort]);
 
     const handleScroll = () => {
         if (!tableContainerRef.current) return;
@@ -252,6 +292,43 @@ export default function AdminQuotesPage() {
                 </div>
             </div>
 
+            {/* Context Menu */}
+            {contextMenu && (
+                <div 
+                    className="fixed bg-white shadow-xl rounded-lg py-1 z-50 border border-gray-200 min-w-[160px]"
+                    style={{ top: contextMenu.y, left: contextMenu.x }}
+                    onClick={(e) => e.stopPropagation()}
+                >
+                    <button 
+                        className="w-full text-left px-4 py-2.5 hover:bg-gray-50 text-sm text-gray-700 flex items-center transition-colors"
+                        onClick={() => {
+                            // Copy Logic
+                            const text = String(contextMenu.value || '');
+                            if (navigator.clipboard) {
+                                navigator.clipboard.writeText(text);
+                                toast.success('Kopyalandı');
+                            }
+                            setContextMenu(null);
+                        }}
+                    >
+                        <Copy size={16} className="mr-3 text-gray-500" />
+                        Kopyala
+                    </button>
+                    <button 
+                        className="w-full text-left px-4 py-2.5 hover:bg-gray-50 text-sm text-gray-700 flex items-center transition-colors"
+                        onClick={() => {
+                            // Edit Logic - Placeholder
+                            // Ideally navigate to edit page or open modal
+                            toast('Düzenleme modu yakında...', { icon: '✏️' });
+                            setContextMenu(null);
+                        }}
+                    >
+                        <Edit size={16} className="mr-3 text-blue-600" />
+                        Düzenle
+                    </button>
+                </div>
+            )}
+
             <div className="flex flex-col h-full bg-gray-50/50 flex-1 min-h-0">
                 {/* Filters */}
                 <div className="p-4 bg-white border-b flex flex-wrap gap-4 items-center justify-between shadow-sm z-10">
@@ -269,13 +346,15 @@ export default function AdminQuotesPage() {
                         <div className="flex items-center gap-2 bg-gray-50 p-1 rounded-lg border border-gray-200">
                             <Calendar size={16} className="text-gray-500 ml-2" />
                             <select
-                                value={selectedMonth}
-                                onChange={(e) => setSelectedMonth(Number(e.target.value))}
+                                value={dateFilter}
+                                onChange={(e) => setDateFilter(e.target.value)}
                                 className="bg-transparent border-none text-sm font-medium text-gray-700 focus:ring-0 cursor-pointer py-1.5"
                             >
-                                {months.map(m => (
-                                    <option key={m.value} value={m.value}>{m.label}</option>
-                                ))}
+                                <option value="today">Bugün</option>
+                                <option value="yesterday">Dün</option>
+                                <option value="this_week">Bu Hafta</option>
+                                <option value="this_month">Bu Ay</option>
+                                <option value="all">Tüm Zamanlar</option>
                             </select>
                         </div>
                     </div>
@@ -344,9 +423,19 @@ export default function AdminQuotesPage() {
                                             <td 
                                                 key={`${quote.id}-${col.id}`} 
                                                 className={`
-                                                    p-3 text-sm border-b border-gray-100
+                                                    p-3 text-sm border-b border-gray-100 cursor-context-menu
                                                     ${quote.durum === 'iptal' ? 'text-red-900 border-red-100' : 'text-gray-700 group-hover:bg-blue-50/50'}
                                                 `}
+                                                onContextMenu={(e) => {
+                                                    e.preventDefault();
+                                                    setContextMenu({
+                                                        x: e.clientX,
+                                                        y: e.clientY,
+                                                        row: quote,
+                                                        field: col.id as string,
+                                                        value: (quote as any)[col.id as string]
+                                                    });
+                                                }}
                                             >
                                                 <div className="truncate" style={{ maxWidth: col.minWidth }}>
                                                     {renderCell(quote, col.id as string)}

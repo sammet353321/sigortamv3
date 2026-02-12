@@ -62,6 +62,26 @@ export default function EmployeeNewQuote({ embedded, initialState, onClose, init
   const [uploadedFile, setUploadedFile] = useState<File | null>(null); // For License AI
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
+  // Check if form has data
+  const isFormDirty = () => {
+      const { durum_kisi, ...rest } = formData; // Exclude default 'FERT'
+      const hasText = Object.values(rest).some(val => val !== '' && val !== null);
+      const hasFiles = attachedFiles.length > 0 || uploadedFile !== null || priceListFile !== null;
+      return hasText || hasFiles;
+  };
+
+  // Prevent Window Close
+  useEffect(() => {
+      const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+          if (isFormDirty()) {
+              e.preventDefault();
+              e.returnValue = '';
+          }
+      };
+      window.addEventListener('beforeunload', handleBeforeUnload);
+      return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [formData, attachedFiles, uploadedFile, priceListFile]);
+
   // Sync Tali if prop changes
   useEffect(() => {
       if (initialGroupName) setTali(initialGroupName);
@@ -118,6 +138,13 @@ export default function EmployeeNewQuote({ embedded, initialState, onClose, init
   const handleProductChange = (newProduct: string) => {
     const prev = prevProductRef.current;
     
+    // Check for data loss
+    if (isFormDirty()) {
+        if (!window.confirm('Geçiş yaparsanız girdiğiniz bilgiler silinecektir. Onaylıyor musunuz?')) {
+            return;
+        }
+    }
+
     const isVehicle = (p: string) => p === 'TRAFİK' || p === 'KASKO';
     const isSameCategory = isVehicle(prev) && isVehicle(newProduct);
     
@@ -471,9 +498,10 @@ export default function EmployeeNewQuote({ embedded, initialState, onClose, init
 
         // 5. Notes
         const extraInfo = getExtraInfo();
-        if (extraInfo) {
-             itemsToSend.push({ type: 'text', content: extraInfo });
-        }
+        // User requested to remove notes from the message content
+        // if (extraInfo) {
+        //      itemsToSend.push({ type: 'text', content: extraInfo });
+        // }
 
         // Send
         if (onSendMessage) {
@@ -512,7 +540,18 @@ export default function EmployeeNewQuote({ embedded, initialState, onClose, init
       {embedded && onClose && (
           <div className="flex justify-between items-center mb-4">
               <h2 className="text-lg font-bold text-gray-800">Teklif Oluştur</h2>
-              <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full">
+              <button 
+                onClick={() => {
+                    if (isFormDirty()) {
+                        if (window.confirm('Kapatırsanız girdiğiniz bilgiler silinecektir. Emin misiniz?')) {
+                            onClose();
+                        }
+                    } else {
+                        onClose();
+                    }
+                }} 
+                className="p-2 hover:bg-gray-100 rounded-full"
+              >
                   <X size={20} className="text-gray-500" />
               </button>
           </div>

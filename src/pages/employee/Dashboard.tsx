@@ -1,10 +1,27 @@
-import { useState, useEffect } from 'react';
-import { supabase } from '@/lib/supabase';
+import { LogOut, Bell, Shield, User, Users, FileText, BarChart3, Menu, X, MessageCircle, ShieldCheck, TrendingUp, Calendar, Wallet, DollarSign } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '@/context/AuthContext';
-import { FileText, Clock, AlertCircle, Plus, Calendar, TrendingUp, Users, DollarSign, Wallet, ArrowRight } from 'lucide-react';
+import { supabase } from '@/lib/supabase';
+import RequestsPanel from '@/components/RequestsPanel'; // Import RequestsPanel
+import { 
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+  PieChart as RechartsPieChart, Pie, Cell
+} from 'recharts';
+import { format } from 'date-fns';
+import { tr } from 'date-fns/locale';
 import { Link } from 'react-router-dom';
-import { format, startOfMonth, endOfMonth } from 'date-fns';
-import DateRangePicker, { DateRange } from '@/components/DateRangePicker';
+import DatePicker, { registerLocale } from 'react-datepicker';
+import "react-datepicker/dist/react-datepicker.css";
+import trLocale from 'date-fns/locale/tr';
+
+registerLocale('tr', trLocale);
+
+const MONTHS = [
+  'Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran',
+  'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'
+];
+
+const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#82ca9d', '#ffc658', '#ff7300'];
 
 export default function EmployeeDashboard() {
   const { user } = useAuth();
@@ -13,272 +30,433 @@ export default function EmployeeDashboard() {
     activePolicies: 0,
     expiringPolicies: 0,
     totalCommission: 0,
-    monthlyCommission: 0,
-    totalPremium: 0
+    totalPremium: 0,
+    conversionRate: 0
   });
-  
-  // Date Filter State
-  const [dateRange, setDateRange] = useState<DateRange>({
-    from: startOfMonth(new Date()),
-    to: endOfMonth(new Date()),
-    label: 'Bu Ay'
-  });
+
+  // Chart Data State
+  const [productBreakdown, setProductBreakdown] = useState<any[]>([]);
+  const [companyBreakdown, setCompanyBreakdown] = useState<any[]>([]);
+  const [monthlyProduction, setMonthlyProduction] = useState<any[]>([]);
+  const [upcomingRenewals, setUpcomingRenewals] = useState<any[]>([]);
+
+  // Filter State
+  const [dateRange, setDateRange] = useState<[Date | null, Date | null]>([new Date(), new Date()]);
+  const [startDate, endDate] = dateRange;
+  const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth());
+  const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
 
   useEffect(() => {
     let isMounted = true;
-    const controller = new AbortController();
-
     const loadStats = async () => {
       if (!user) return;
-      
       try {
         await fetchStats(isMounted);
       } catch (err) {
         if (isMounted) console.error(err);
       }
     };
-
     loadStats();
-
-    return () => {
-      isMounted = false;
-      controller.abort();
-    };
-  }, [user, dateRange]);
+    return () => { isMounted = false; };
+  }, [user?.id, startDate, endDate, selectedMonth, selectedYear]);
 
   const fetchStats = async (isMounted: boolean) => {
     if (!user) return;
 
     try {
-      const startStr = dateRange.from.toISOString();
-      const endStr = dateRange.to.toISOString();
+      // 1. Calculate Date Range based on Filters
+      let queryStartDate = startDate || new Date();
+      let queryEndDate = endDate || new Date();
+      
+      const startStr = format(queryStartDate, 'yyyy-MM-dd');
+      const endStr = format(queryEndDate, 'yyyy-MM-dd');
 
-      // 1. Quotes (Teklifler) in range
-      let quotesQuery = supabase
-        .from('teklifler')
-        .select('*', { count: 'exact', head: true })
-        .eq('employee_id', user.id); 
+      // 2. Fetch Stats via Backend Proxy (Bypasses RLS)
+      // We use the local backend which has Service Role access
+      const response = await fetch('http://localhost:3004/dashboard/stats', {
+          method: 'POST',
+          headers: {
+              'Content-Type': 'application/json',
+              'x-api-secret': 'SigortaSecurev3_2026_Key'
+          },
+          body: JSON.stringify({
+              employeeId: user.id,
+              startDate: startStr,
+              endDate: endStr,
+              year: selectedYear
+          })
+      });
 
-      // Apply date filter ONLY if dates are valid
-      if (startStr && endStr) {
-          quotesQuery = quotesQuery
-            .gte('created_at', startStr)
-            .lte('created_at', endStr);
+      if (!response.ok) {
+          throw new Error(`API Error: ${response.statusText}`);
       }
-      
-      const { count: quotesCount, error: quotesError } = await quotesQuery;
-      
+
+      const { kpi, yearStats, quoteBreakdownRaw, policyBreakdownRaw, renewals } = await response.json();
+
       if (!isMounted) return;
 
-      if (quotesError) {
-          if (quotesError.message !== 'FetchError: The user aborted a request.') {
-              console.error('Error fetching quotes stats:', quotesError);
-          }
-      }
-
-      const adjustedEndStr = new Date(dateRange.to.setHours(23, 59, 59, 999)).toISOString();
-
-      // Re-query with adjusted time
-      let quotesFinalQuery = supabase
-        .from('teklifler')
-        .select('*', { count: 'exact', head: true })
-        .eq('employee_id', user.id);
-        
-      if (startStr && adjustedEndStr) {
-          quotesFinalQuery = quotesFinalQuery
-            .gte('created_at', startStr)
-            .lte('created_at', adjustedEndStr);
-      }
-
-      const { count: quotesCountFinal, error: quotesFinalError } = await quotesFinalQuery;
+      // --- Process Data ---
+      const quotesData = quoteBreakdownRaw || [];
+      const policiesData = policyBreakdownRaw || [];
       
-      if (!isMounted) return;
-
-      if (quotesFinalError) {
-           // Ignore ERR_ABORTED logs which are just cancellations
-           if (quotesFinalError.message !== 'FetchError: The user aborted a request.' && !quotesFinalError.message.includes('ABORTED')) {
-               console.error('Error fetching quotes stats final:', quotesFinalError);
-           }
-      }
-
-      // 2. Active Policies (Poliçeler) - Sales in range
-      let policiesQuery = supabase
-        .from('policeler')
-        .select('net_prim, komisyon')
-        .eq('employee_id', user.id);
-
-      if (startStr && adjustedEndStr) {
-          policiesQuery = policiesQuery
-            .gte('created_at', startStr)
-            .lte('created_at', adjustedEndStr);
-      }
-
-      const { data: policiesData, error: policiesError } = await policiesQuery;
+      // KPI directly from backend aggregation (fast table)
+      const quotesCount = kpi.totalQuotes;
+      const policiesCount = kpi.totalPolicies;
+      const totalPrem = kpi.totalPremium;
+      const totalComm = kpi.totalCommission;
       
-      if (!isMounted) return;
+      const conversion = quotesCount > 0 ? ((policiesCount / quotesCount) * 100).toFixed(1) : 0;
 
-      if (policiesError) {
-           if (policiesError.message !== 'FetchError: The user aborted a request.' && !policiesError.message.includes('ABORTED')) {
-               console.error('Error fetching policies stats:', policiesError);
-           }
-      }
+      // Product Breakdown (Quotes vs Policies)
+      const productStats: Record<string, { quotes: number, policies: number }> = {};
+      
+      // Handle Quotes Breakdown
+      quotesData.forEach((q: any) => {
+        let prod = (q.tur || 'Diğer').trim().toUpperCase();
+        if (!productStats[prod]) productStats[prod] = { quotes: 0, policies: 0 };
+        productStats[prod].quotes++;
+      });
 
-      const totalPrem = policiesData?.reduce((acc, curr) => acc + (curr.net_prim || 0), 0) || 0;
-      const totalComm = policiesData?.reduce((acc, curr) => acc + (curr.komisyon || 0), 0) || 0;
+      // Handle Policies Breakdown
+      policiesData.forEach((p: any) => {
+        let prod = (p.tur || 'Diğer').trim().toUpperCase();
+        if (!productStats[prod]) productStats[prod] = { quotes: 0, policies: 0 };
+        productStats[prod].policies++;
+      });
+      
+      const prodChartData = Object.keys(productStats).map(key => ({
+          name: key, 
+          shortName: key.length > 10 ? key.substring(0, 10) + '...' : key,
+          Teklif: productStats[key].quotes,
+          Poliçe: productStats[key].policies
+      }));
 
-      // 3. Expiring Soon (Always 14 days from now, unrelated to filter)
-      const { count: expiringCount, error: expiringError } = await supabase
-        .from('policeler')
-        .select('*', { count: 'exact', head: true })
-        .eq('employee_id', user.id)
-        .gte('tarih', new Date().toISOString())
-        .lte('tarih', new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString());
-        
-      if (!isMounted) return;
+      // Company Breakdown (Policies)
+      const companyStats: Record<string, number> = {};
+      policiesData.forEach((p: any) => {
+        let comp = (p.sirket || 'Diğer').trim().toUpperCase();
+        companyStats[comp] = (companyStats[comp] || 0) + 1;
+      });
+      
+      const companyChartData = Object.keys(companyStats).map(key => ({
+          name: key,
+          value: companyStats[key]
+      }));
 
-      if (expiringError) {
-           console.error('Error fetching expiring stats:', expiringError);
-      }
+      // Monthly Production (Full Year) - From Optimized Year Stats
+      const monthlyData = Array.from({ length: 12 }, (_, i) => {
+          const monthName = format(new Date(selectedYear, i, 1), 'MMMM', { locale: tr });
+          
+          // Filter yearStats for this month
+          const monthStats = yearStats?.filter((s: any) => s.date && new Date(s.date).getMonth() === i) || [];
+          
+          const qCount = monthStats.reduce((acc: number, curr: any) => acc + (curr.quote_count || 0), 0);
+          const pCount = monthStats.reduce((acc: number, curr: any) => acc + (curr.policy_count || 0), 0);
+          
+          return {
+              name: monthName,
+              Teklif: qCount,
+              Poliçe: pCount,
+              Oran: qCount > 0 ? Math.round((pCount / qCount) * 100) : 0
+          };
+      });
 
       setStats({
-        totalQuotes: quotesCountFinal || 0,
-        activePolicies: policiesData?.length || 0,
-        expiringPolicies: expiringCount || 0,
+        totalQuotes: quotesCount,
+        activePolicies: policiesCount,
+        expiringPolicies: renewals?.length || 0,
         totalCommission: totalComm,
-        monthlyCommission: 0, 
-        totalPremium: totalPrem
+        totalPremium: totalPrem,
+        conversionRate: Number(conversion)
       });
+      
+      setProductBreakdown(prodChartData);
+      setCompanyBreakdown(companyChartData);
+      setMonthlyProduction(monthlyData);
+      setUpcomingRenewals(renewals?.map((r: any) => ({
+        ...r,
+        urun_adi: r.tur // Map tur to urun_adi for compatibility
+      })) || []);
 
     } catch (error) {
       if (isMounted) console.error('Error fetching dashboard stats:', error);
     }
   };
 
+  const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#82ca9d', '#ffc658', '#ff7300'];
+
   return (
-    <div className="space-y-6">
-      {/* Header & Date Filters */}
-      <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+    <div className="space-y-6 pb-10">
+      {/* Welcome & Stats */}
+      <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex flex-col md:flex-row justify-between items-center gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-800">Hoş Geldin, {user?.name} 👋</h1>
-          <p className="text-gray-500 text-sm">İşte performans özetin ve güncel durumun.</p>
+          <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
+            Hoş Geldin, {user?.email?.split('@')[0].toUpperCase()} 👋
+          </h1>
+          <p className="text-gray-500 mt-1">Performans durumun ve üretim analizlerin.</p>
         </div>
-        
-        <div className="flex items-center gap-2">
-             <DateRangePicker 
-                dateRange={dateRange}
-                onChange={setDateRange}
-             />
+
+        <div className="flex flex-col sm:flex-row gap-3 items-end">
+          {/* Year Selector */}
+          <div className="flex flex-col items-end gap-1">
+            <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider">YILLIK GRAFİK İÇİN</label>
+            <select
+              value={selectedYear}
+              onChange={(e) => setSelectedYear(Number(e.target.value))}
+              className="bg-white border border-gray-200 text-gray-700 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-24 p-2 shadow-sm font-medium hover:border-blue-300 transition-colors cursor-pointer"
+            >
+              <option value={2026}>2026</option>
+              <option value={2025}>2025</option>
+              <option value={2024}>2024</option>
+            </select>
+          </div>
+
+          {/* Date Range Picker */}
+          <div className="flex flex-col items-end gap-1">
+            <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider">TARİH ARALIĞI SEÇİNİZ</label>
+            <div className="relative group">
+              <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none z-10">
+                <Calendar className="w-4 h-4 text-gray-400 group-hover:text-blue-500 transition-colors" />
+              </div>
+              <DatePicker
+                selectsRange={true}
+                startDate={startDate}
+                endDate={endDate}
+                onChange={(update) => {
+                  setDateRange(update);
+                }}
+                isClearable={true}
+                locale="tr"
+                dateFormat="dd MMMM yyyy"
+                placeholderText="Tarih Aralığı Seçin"
+                className="bg-white border border-gray-200 text-gray-700 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-64 pl-10 p-2 shadow-sm font-medium hover:border-blue-300 transition-colors cursor-pointer"
+                wrapperClassName="w-full"
+              />
+            </div>
+          </div>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* KPI Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
         {/* Total Quotes */}
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition-shadow">
+        <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
           <div className="flex justify-between items-start">
             <div>
-              <p className="text-gray-500 text-sm font-medium">Verilen Teklif</p>
-              <h3 className="text-3xl font-bold text-gray-800 mt-2">{stats.totalQuotes}</h3>
+              <p className="text-gray-500 text-xs font-bold uppercase tracking-wider">Verilen Teklif</p>
+              <h3 className="text-2xl font-bold text-gray-800 mt-1">{stats.totalQuotes}</h3>
             </div>
-            <div className="p-3 bg-blue-50 rounded-lg text-blue-600">
-              <FileText size={24} />
+            <div className="p-2 bg-blue-50 rounded-lg text-blue-600">
+              <FileText size={20} />
             </div>
-          </div>
-          <div className="mt-4 flex items-center text-xs text-gray-400">
-             <span className="bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-medium mr-2">Seçili Dönem</span>
           </div>
         </div>
 
         {/* Policies (Sales) */}
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition-shadow">
+        <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
           <div className="flex justify-between items-start">
             <div>
-              <p className="text-gray-500 text-sm font-medium">Kesilen Poliçe</p>
-              <h3 className="text-3xl font-bold text-gray-800 mt-2">{stats.activePolicies}</h3>
+              <p className="text-gray-500 text-xs font-bold uppercase tracking-wider">Kesilen Poliçe</p>
+              <h3 className="text-2xl font-bold text-gray-800 mt-1">{stats.activePolicies}</h3>
             </div>
-            <div className="p-3 bg-green-50 rounded-lg text-green-600">
-              <Users size={24} />
+            <div className="p-2 bg-green-50 rounded-lg text-green-600">
+              <Users size={20} />
             </div>
           </div>
-          <div className="mt-4 flex items-center text-xs text-gray-400">
-             <span className="bg-green-100 text-green-700 px-1.5 py-0.5 rounded font-medium mr-2">Seçili Dönem</span>
+        </div>
+
+        {/* Conversion Rate */}
+        <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+          <div className="flex justify-between items-start">
+            <div>
+              <p className="text-gray-500 text-xs font-bold uppercase tracking-wider">Poliçeleştirme Oranı</p>
+              <h3 className="text-2xl font-bold text-gray-800 mt-1">%{stats.conversionRate}</h3>
+            </div>
+            <div className="p-2 bg-teal-50 rounded-lg text-teal-600">
+              <TrendingUp size={20} />
+            </div>
           </div>
         </div>
 
         {/* Total Premium */}
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition-shadow">
+        <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
           <div className="flex justify-between items-start">
             <div>
-              <p className="text-gray-500 text-sm font-medium">Toplam Prim</p>
-              <h3 className="text-2xl font-bold text-gray-800 mt-2">
+              <p className="text-gray-500 text-xs font-bold uppercase tracking-wider">Toplam Prim</p>
+              <h3 className="text-2xl font-bold text-gray-800 mt-1">
                 ₺{stats.totalPremium.toLocaleString('tr-TR', { maximumFractionDigits: 0 })}
               </h3>
             </div>
-            <div className="p-3 bg-purple-50 rounded-lg text-purple-600">
-              <Wallet size={24} />
+            <div className="p-2 bg-purple-50 rounded-lg text-purple-600">
+              <Wallet size={20} />
             </div>
-          </div>
-           <div className="mt-4 flex items-center text-xs text-gray-400">
-             <span className="bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded font-medium mr-2">Net Prim</span>
           </div>
         </div>
         
-         {/* Commission (Earnings) */}
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition-shadow">
+         {/* Commission */}
+        <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
           <div className="flex justify-between items-start">
             <div>
-              <p className="text-gray-500 text-sm font-medium">Kazanç (Komisyon)</p>
-              <h3 className="text-2xl font-bold text-gray-800 mt-2">
+              <p className="text-gray-500 text-xs font-bold uppercase tracking-wider">Kazanç</p>
+              <h3 className="text-2xl font-bold text-gray-800 mt-1">
                  ₺{stats.totalCommission.toLocaleString('tr-TR', { maximumFractionDigits: 0 })}
               </h3>
             </div>
-            <div className="p-3 bg-amber-50 rounded-lg text-amber-600">
-              <DollarSign size={24} />
+            <div className="p-2 bg-amber-50 rounded-lg text-amber-600">
+              <DollarSign size={20} />
             </div>
-          </div>
-           <div className="mt-4 flex items-center text-xs text-gray-400">
-             <span className="bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded font-medium mr-2">Tahmini</span>
           </div>
         </div>
       </div>
-      
-      {/* Action Banner & Expiring Soon */}
+
+      {/* Main Content Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-2 bg-gradient-to-r from-blue-600 to-indigo-700 rounded-xl p-6 text-white shadow-lg flex flex-col md:flex-row items-center justify-between relative overflow-hidden">
-             <div className="relative z-10">
-                 <h2 className="text-xl font-bold mb-2">Teklifler Sayfası</h2>
-                 <p className="text-blue-100 mb-6 max-w-md">Tekliflerinizi görüntülemek ve yönetmek için tıklayın.</p>
-                 <Link 
-                    to="/employee/quotes" 
-                    className="bg-white text-blue-600 hover:bg-blue-50 px-6 py-3 rounded-lg font-semibold inline-flex items-center gap-2 transition-colors shadow-sm"
-                 >
-                    <FileText size={20} />
-                    Teklifler
-                 </Link>
-             </div>
-             <div className="hidden md:block relative z-10 opacity-90">
-                <FileText size={100} className="text-white/20" />
-             </div>
-              {/* Abstract Circles */}
-             <div className="absolute top-0 right-0 -mt-10 -mr-10 w-40 h-40 bg-white/10 rounded-full blur-2xl"></div>
-             <div className="absolute bottom-0 left-0 -mb-10 -ml-10 w-40 h-40 bg-blue-400/20 rounded-full blur-2xl"></div>
+          
+          {/* Left Column: Charts */}
+          <div className="lg:col-span-2 space-y-6">
+              {/* Product Breakdown Chart */}
+              <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+                  <h3 className="text-lg font-bold text-gray-800 mb-6">Ürün Bazlı Performans (Teklif vs Poliçe)</h3>
+                  <div className="h-80 flex items-center justify-center">
+                    {productBreakdown.length > 0 ? (
+                        <ResponsiveContainer width="100%" height="100%">
+                            <BarChart data={productBreakdown} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
+                                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                                <XAxis dataKey="shortName" axisLine={false} tickLine={false} tick={{fontSize: 10}} interval={0} angle={-30} textAnchor="end" height={50} />
+                                <YAxis axisLine={false} tickLine={false} />
+                                <Tooltip cursor={{ fill: '#f3f4f6' }} contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} />
+                                <Legend />
+                                <Bar dataKey="Teklif" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+                                <Bar dataKey="Poliçe" fill="#10b981" radius={[4, 4, 0, 0]} />
+                            </BarChart>
+                        </ResponsiveContainer>
+                    ) : (
+                        <p className="text-gray-400">Veri bulunamadı.</p>
+                    )}
+                  </div>
+              </div>
+
+              {/* Company Breakdown */}
+              <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+                  <h2 className="text-lg font-bold text-gray-800 mb-4">Şirket Bazlı Satış Dağılımı</h2>
+                  <div className="h-80">
+                      <ResponsiveContainer width="100%" height="100%">
+                          <RechartsPieChart>
+                              <Pie
+                                  data={companyBreakdown}
+                                  cx="50%"
+                                  cy="50%"
+                                  labelLine={false}
+                                  label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                                  outerRadius={80}
+                                  fill="#8884d8"
+                                  dataKey="value"
+                              >
+                                  {companyBreakdown.map((entry, index) => (
+                                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                                  ))}
+                              </Pie>
+                              <Tooltip formatter={(value: number) => [value + ' Adet', 'Satış']} />
+                              <Legend 
+                                  layout="vertical" 
+                                  verticalAlign="middle" 
+                                  align="right"
+                                  formatter={(value, entry: any) => {
+                                      const { payload } = entry;
+                                      const total = companyBreakdown.reduce((acc, curr) => acc + curr.value, 0);
+                                      const percent = total > 0 ? ((payload.value / total) * 100).toFixed(1) : 0;
+                                      return <span className="text-gray-600 font-medium ml-2">{value}: {payload.value} Adet ({percent}%)</span>;
+                                  }}
+                              />
+                          </RechartsPieChart>
+                      </ResponsiveContainer>
+                  </div>
+              </div>
           </div>
 
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-              <div className="flex items-center justify-between mb-4">
-                  <h3 className="font-bold text-gray-800">Yaklaşan Yenilemeler</h3>
-                  <span className="bg-red-100 text-red-600 text-xs font-bold px-2 py-1 rounded-full">{stats.expiringPolicies}</span>
+          {/* Right Column: Requests & Renewals */}
+          <div className="space-y-6 flex flex-col">
+              {/* Requests Panel */}
+              <div className="h-[400px]">
+                  <RequestsPanel />
               </div>
-              <p className="text-sm text-gray-500 mb-4">Önümüzdeki 14 gün içinde süresi dolacak poliçeler.</p>
-              
-              <Link to="/employee/renewals" className="block w-full">
-                <div className="flex items-center justify-between p-3 bg-red-50 hover:bg-red-100 rounded-lg border border-red-100 transition-colors group">
-                    <div className="flex items-center gap-3">
-                        <AlertCircle className="text-red-500" size={20} />
-                        <span className="font-medium text-red-700">Yenilemeleri Gör</span>
-                    </div>
-                    <ArrowRight size={18} className="text-red-400 group-hover:translate-x-1 transition-transform" />
-                </div>
-              </Link>
+
+              {/* Renewals */}
+              <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex-1 min-h-[400px]">
+                  <div className="flex items-center justify-between mb-6">
+                      <h3 className="text-lg font-bold text-gray-800">Yaklaşan Yenilemeler</h3>
+                      <Link to="/employee/renewals" className="text-sm text-blue-600 hover:text-blue-700 font-bold">Tümü</Link>
+                  </div>
+                  
+                  <div className="space-y-4">
+                      {upcomingRenewals.length === 0 ? (
+                          <div className="text-center text-gray-400 py-8">Yaklaşan yenileme yok.</div>
+                      ) : (
+                          upcomingRenewals.map((renewal) => (
+                              <div key={renewal.id} className="p-4 bg-gray-50 rounded-lg border border-gray-100 hover:border-blue-200 transition-colors">
+                                  <div className="flex justify-between items-start mb-2">
+                                      <h4 className="font-bold text-gray-800 text-sm truncate w-32" title={renewal.musteri_adi}>{renewal.musteri_adi}</h4>
+                                      <span className="text-xs font-mono bg-white px-2 py-0.5 rounded border border-gray-200 text-gray-600">{renewal.plaka}</span>
+                                  </div>
+                                  <div className="flex justify-between items-center text-xs">
+                                      <span className="text-gray-500">{renewal.urun_adi}</span>
+                                      <span className={`font-bold ${
+                                          new Date(renewal.bitis_tarihi) < new Date() ? 'text-red-600' : 'text-orange-600'
+                                      }`}>
+                                          {format(new Date(renewal.bitis_tarihi), 'dd.MM.yyyy')}
+                                      </span>
+                                  </div>
+                              </div>
+                          ))
+                      )}
+                  </div>
+              </div>
+          </div>
+      </div>
+
+      {/* Bottom Panel: Annual Production Chart */}
+      <div className="bg-slate-900 p-8 rounded-2xl shadow-xl text-white mt-8">
+          <div className="flex justify-between items-center mb-8">
+              <div>
+                  <h3 className="text-2xl font-bold mb-1">Yıllık Üretim Çizelgesi ({selectedYear})</h3>
+                  <p className="text-slate-400 text-sm">Aylık bazda teklif ve poliçe performans analizi.</p>
+              </div>
+              <div className="flex items-center gap-4">
+                   <div className="flex items-center gap-2">
+                       <div className="w-3 h-3 rounded-full bg-blue-500"></div>
+                       <span className="text-sm text-slate-300">Teklif</span>
+                   </div>
+                   <div className="flex items-center gap-2">
+                       <div className="w-3 h-3 rounded-full bg-emerald-500"></div>
+                       <span className="text-sm text-slate-300">Poliçe</span>
+                   </div>
+              </div>
+          </div>
+          
+          <div className="h-80 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={monthlyProduction} margin={{ top: 10, right: 10, left: 0, bottom: 20 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#334155" />
+                    <XAxis 
+                        dataKey="name" 
+                        axisLine={false} 
+                        tickLine={false} 
+                        tick={{ fill: '#94a3b8', fontSize: 12 }} 
+                        interval={0}
+                        angle={-45}
+                        textAnchor="end"
+                        height={60}
+                    />
+                    <YAxis axisLine={false} tickLine={false} tick={{ fill: '#94a3b8' }} />
+                    <Tooltip 
+                        contentStyle={{ backgroundColor: '#1e293b', border: 'none', borderRadius: '8px', color: '#fff' }}
+                        itemStyle={{ color: '#fff' }}
+                        cursor={{ fill: '#334155', opacity: 0.4 }}
+                    />
+                    <Bar dataKey="Teklif" fill="#3b82f6" radius={[4, 4, 0, 0]} maxBarSize={50} />
+                    <Bar dataKey="Poliçe" fill="#10b981" radius={[4, 4, 0, 0]} maxBarSize={50} />
+                </BarChart>
+            </ResponsiveContainer>
           </div>
       </div>
     </div>
